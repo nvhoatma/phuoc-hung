@@ -54,6 +54,7 @@ function getTableDataInitial(tableKey, forceRefresh) {
   try {
     const rowsData = buildTableRowsData_(table, {
       limit: TABLE_INITIAL_ROW_LIMIT,
+      fromStart: true,
     });
     data = createInitialTableData_(attachLightFieldSchema_(rowsData));
   } catch (error) {
@@ -93,7 +94,6 @@ function createInitialTableData_(data) {
 }
 
 function getTablePage(payload) {
-  const startedAt = Date.now();
   assertSpreadsheetAccess_();
   const request = payload || {};
   const tableKey = request.tableKey || '';
@@ -103,16 +103,7 @@ function getTablePage(payload) {
   const data = hasServerTableProcessing_(pageRequest)
     ? buildProcessedTablePage_(table, pageRequest)
     : buildCursorTablePage_(table, pageRequest);
-  const result = attachLightFieldSchema_(data);
-  result.performance = {
-    operation: 'getTablePage',
-    mode: data && data.serverPage ? data.serverPage.mode : 'paged',
-    sourceRows: data && data.serverPage ? Number(data.serverPage.sourceRows || 0) : 0,
-    returnedRows: data && data.rows ? data.rows.length : 0,
-    totalMs: Date.now() - startedAt,
-  };
-  console.log(JSON.stringify(Object.assign({ tableKey }, result.performance)));
-  return sanitizeClientPayload_(result);
+  return sanitizeClientPayload_(attachFieldSchema_(data, table, false));
 }
 
 function getTableDataPage(tableKey, request) {
@@ -120,24 +111,18 @@ function getTableDataPage(tableKey, request) {
 }
 
 function buildProcessedTablePage_(table, payload) {
-  const sourceData = buildTableRowsData_(table, { limit: TABLE_ROW_LIMIT });
+  const sourceData = buildTableData_(table, false, { limit: TABLE_ROW_LIMIT });
   const processed = applyServerTableQuery_(sourceData.rows || [], sourceData.headers || [], payload);
   const pageCount = Math.max(1, Math.ceil(processed.rows.length / payload.pageSize));
   const page = Math.min(Math.max(1, payload.page), pageCount);
   const startIndex = (page - 1) * payload.pageSize;
-  const sourceEndIndex = payload.sort && payload.sort.header
-    ? Math.min(processed.rows.length, startIndex + payload.pageSize)
-    : Math.max(0, processed.rows.length - startIndex);
-  const sourceStartIndex = payload.sort && payload.sort.header
-    ? startIndex
-    : Math.max(0, sourceEndIndex - payload.pageSize);
-  const pageRows = processed.rows.slice(sourceStartIndex, sourceEndIndex);
+  const pageRows = processed.rows.slice(startIndex, startIndex + payload.pageSize);
   return Object.assign({}, sourceData, {
     rows: pageRows,
     summary: createSummary_(sourceData.headers || [], processed.rows),
     filterFacets: createServerFilterFacets_(processed.rows, sourceData.headers || [], payload.filterHeaders),
     serverPage: {
-      mode: 'processed',
+      mode: 'paged',
       page,
       pageSize: payload.pageSize,
       pageCount,
@@ -158,24 +143,17 @@ function buildProcessedTablePage_(table, payload) {
 
 function buildCursorTablePage_(table, payload) {
   const offset = Math.max(0, Number(payload.cursor || ((payload.page - 1) * payload.pageSize)));
-  const snapshotEndRow = resolveTableSnapshotEndRow_(table, payload.snapshotEndRow);
-  const sourceData = buildTableRowsData_(table, {
-    limit: payload.pageSize + 1,
-    offset,
-    endRow: snapshotEndRow,
-  });
+  const sourceData = buildTableData_(table, false, { limit: payload.pageSize + 1, offset });
   const rows = sourceData.rows || [];
-  // Tail reads return rows in ascending sheet order. The extra row is a
-  // look-ahead before the requested window, so retain the newest pageSize rows.
-  const pageRows = rows.slice(Math.max(0, rows.length - payload.pageSize));
+  const pageRows = rows.slice(0, payload.pageSize);
   const hasMore = rows.length > payload.pageSize || !!(sourceData.dataWindow && sourceData.dataWindow.truncated);
-  const totalEstimate = estimateTableRowCount_(table, snapshotEndRow);
+  const totalEstimate = estimateTableRowCount_(table);
   return Object.assign({}, sourceData, {
     rows: pageRows,
     summary: createSummary_(sourceData.headers || [], pageRows),
     filterFacets: createServerFilterFacets_(pageRows, sourceData.headers || [], payload.filterHeaders),
     serverPage: {
-      mode: 'cursor',
+      mode: 'paged',
       page: Math.max(1, Math.floor(offset / payload.pageSize) + 1),
       pageSize: payload.pageSize,
       pageCount: Math.max(1, Math.ceil(totalEstimate / payload.pageSize)),
@@ -183,7 +161,6 @@ function buildCursorTablePage_(table, payload) {
       totalEstimate,
       totalExact: false,
       sourceRows: totalEstimate,
-      snapshotEndRow,
       startIndex: offset,
       endIndex: offset + pageRows.length,
       cursor: offset,
@@ -199,55 +176,6 @@ function buildCursorTablePage_(table, payload) {
       nextOffset: hasMore ? offset + pageRows.length : '',
       truncated: hasMore,
     }),
-  });
-}
-
-/**
- * Reads rows appended after a completed snapshot using physical row boundaries.
- * Unlike offset paging from the tail, this cursor cannot shift when new rows are
- * appended while the client is hydrating the table.
- */
-function getTableDataDelta(payload) {
-  const startedAt = Date.now();
-  assertSpreadsheetAccess_();
-  const request = payload || {};
-  const tableKey = String(request.tableKey || '').trim();
-  if (!tableKey) throw new Error('Missing tableKey.');
-  const table = getTableOrThrow_(tableKey, false);
-  const afterRowNumber = Math.max(0, Math.round(Number(request.afterRowNumber || 0)));
-  const scanLimit = Math.max(50, Math.min(1000, Math.round(Number(request.scanLimit || 1000))));
-  const bounds = getTablePhysicalBounds_(table, true);
-  const snapshotEndRow = bounds.endRow;
-  const scanStartRow = Math.max(bounds.dataStartRow, afterRowNumber + 1);
-  const scanEndRow = Math.min(snapshotEndRow, scanStartRow + scanLimit - 1);
-  const rows = scanStartRow <= scanEndRow && bounds.width
-    ? bounds.sheet
-      .getRange(scanStartRow, bounds.startColumn, scanEndRow - scanStartRow + 1, bounds.width)
-      .getDisplayValues()
-      .reduce((result, values, index) => {
-        if (isNonBlankDisplayRow_(values)) {
-          result.push(createDataRowPayload_(bounds.headers, scanStartRow + index, values));
-        }
-        return result;
-      }, [])
-    : [];
-  const scannedThroughRow = scanStartRow <= scanEndRow ? scanEndRow : afterRowNumber;
-  return sanitizeClientPayload_({
-    tableKey,
-    rows,
-    deltaPage: {
-      afterRowNumber,
-      scanStartRow,
-      scannedThroughRow,
-      snapshotEndRow,
-      hasMore: scannedThroughRow < snapshotEndRow,
-    },
-    performance: {
-      operation: 'getTableDataDelta',
-      scannedRows: scanStartRow <= scanEndRow ? scanEndRow - scanStartRow + 1 : 0,
-      returnedRows: rows.length,
-      totalMs: Date.now() - startedAt,
-    },
   });
 }
 
@@ -269,7 +197,7 @@ function getTableSchema(tableKey, forceRefresh) {
   assertSpreadsheetAccess_();
   const table = getTableOrThrow_(tableKey, false);
   const headers = readTableMetaHeaders_(table);
-  const schema = getTableFieldSchema_(table, headers, !!forceRefresh);
+  const schema = getTableFieldSchema_(table, headers, true);
   return sanitizeClientPayload_({
     tableKey,
     headers,
@@ -310,56 +238,17 @@ function readTableMetaHeaders_(table) {
   return getSystemTableLayout_(sheet, table).headers;
 }
 
-function estimateTableRowCount_(table, snapshotEndRow) {
-  const requestedEndRow = Number(snapshotEndRow || 0);
-  const bounds = getTablePhysicalBounds_(table);
-  const endRow = requestedEndRow > 0 ? requestedEndRow : bounds.endRow;
-  return Math.max(0, endRow - bounds.dataStartRow + 1);
-}
-
-function resolveTableSnapshotEndRow_(table, requestedEndRow) {
-  const bounds = getTablePhysicalBounds_(table);
-  const requested = Math.round(Number(requestedEndRow || 0));
-  if (!requested) return bounds.endRow;
-  return Math.max(bounds.dataStartRow - 1, Math.min(requested, bounds.maxRow));
-}
-
-function getTablePhysicalBounds_(table, includeColumns) {
+function estimateTableRowCount_(table) {
   if (isNativeReadableTable_(table)) {
-    const sheet = getNativeSheet_(table);
     const range = table.apiRange || {};
-    const headers = includeColumns
-      ? getNativeHeaderList_(table, readNativeTableHeaderRow_(table) || [])
-      : [];
-    const dataStartRow = Number(range.startRowIndex || 0) + 2;
-    const tableEndRow = Number(range.endRowIndex || 0);
-    return {
-      sheet,
-      headers,
-      dataStartRow,
-      startColumn: Number(range.startColumnIndex || 0) + 1,
-      width: headers.length,
-      endRow: Math.max(tableEndRow, Number(sheet.getLastRow() || 0), dataStartRow - 1),
-      maxRow: Math.max(Number(sheet.getMaxRows() || 0), dataStartRow - 1),
-    };
+    const startRow = Number(range.startRowIndex || 0) + 2;
+    const endRow = Number(range.endRowIndex || 0);
+    if (endRow && endRow >= startRow) return endRow - startRow + 1;
+    return Math.max(0, Number(getNativeSheet_(table).getLastRow() || 0) - startRow + 1);
   }
   const sheet = getSheet_(table);
-  const layout = includeColumns
-    ? getSystemTableLayout_(sheet, table)
-    : {
-        headers: [],
-        dataStartRow: getTableDataStartRow_(table),
-        dataStartColumn: DATA_START_COLUMN,
-      };
-  return {
-    sheet,
-    headers: layout.headers || [],
-    dataStartRow: Number(layout.dataStartRow || DATA_START_ROW),
-    startColumn: Number(layout.dataStartColumn || DATA_START_COLUMN),
-    width: (layout.headers || []).length,
-    endRow: Math.max(Number(sheet.getLastRow() || 0), Number(layout.dataStartRow || DATA_START_ROW) - 1),
-    maxRow: Math.max(Number(sheet.getMaxRows() || 0), Number(layout.dataStartRow || DATA_START_ROW) - 1),
-  };
+  const dataStartRow = getTableDataStartRow_(table);
+  return Math.max(0, Number(sheet.getLastRow() || 0) - dataStartRow + 1);
 }
 
 function getTableMetaUiConfig_(tableKey, forceRefresh) {
@@ -414,13 +303,12 @@ function compactTableForMeta_(tableKey, table) {
 }
 
 function normalizeTablePageRequest_(request) {
-  const pageSize = Math.max(50, Math.min(1000, Math.round(Number(request.pageSize || 100))));
+  const pageSize = Math.max(50, Math.min(200, Math.round(Number(request.pageSize || 100))));
   const filters = request.filters && typeof request.filters === 'object' ? request.filters : {};
   return {
     page: Math.max(1, Math.round(Number(request.page || 1))),
     pageSize,
     cursor: Math.max(0, Math.round(Number(request.cursor || 0))),
-    snapshotEndRow: Math.max(0, Math.round(Number(request.snapshotEndRow || 0))),
     query: String(request.query || '').trim(),
     filters: Object.keys(filters).reduce((acc, header) => {
       const values = Array.isArray(filters[header]) ? filters[header] : [];
@@ -438,7 +326,7 @@ function normalizeTablePageRequest_(request) {
 }
 
 function hasServerTableProcessing_(payload) {
-  if (payload.query || payload.status || (payload.sort && payload.sort.header) || (payload.filterHeaders || []).length) return true;
+  if (payload.query || payload.status || (payload.sort && payload.sort.header)) return true;
   return Object.keys(payload.filters || {}).some((header) => (payload.filters[header] || []).length);
 }
 
@@ -573,23 +461,12 @@ function saveRecord(payload) {
     const rowNumber = isNativeReadableTable_(table)
       ? saveNativeRecord_(table, payload)
       : saveSystemRecord_(table, payload);
-    SpreadsheetApp.flush();
-    let savedRow = null;
-    try {
-      savedRow = readSavedRecordRow_(table, rowNumber);
-    } catch (error) {
-      console.warn('Saved row read-back skipped:', error && error.message ? error.message : error);
-    }
-    const invalidation = invalidateTableDataCache_(payload.tableKey) || {};
+    invalidateTableDataCache_(payload.tableKey);
 
     return {
       ok: true,
       rowNumber,
-      id: savedRow ? savedRow.id : '',
-      recordId: savedRow ? savedRow.recordId : '',
-      record: savedRow ? savedRow.record : payload.record,
-      row: savedRow,
-      tableVersion: invalidation.tableVersion || '',
+      record: payload.record,
     };
   } finally {
     lock.releaseLock();
@@ -626,7 +503,7 @@ function deleteRecord(payload) {
     throw new Error('Missing tableKey or rowNumber.');
   }
 
-  const table = getWritableTableForRow_(payload.tableKey, payload.rowNumber);
+  const table = getWritableTableForPayload_(payload.tableKey);
   assertTableWritable_(table);
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
@@ -647,10 +524,6 @@ function deleteRecord(payload) {
 }
 
 function saveNativeRecord_(table, payload) {
-  if (!payload.rowNumber) {
-    table = getTableOrThrow_(table.key, true);
-    assertTableWritable_(table);
-  }
   const headers = getNativeHeaders_(table);
   const computedByHeader = getFormulaColumnByHeader_(table, headers);
   const editableHeaders = headers.filter((header) => !computedByHeader[header]);
@@ -677,7 +550,6 @@ function saveNativeRecord_(table, payload) {
       fields: 'userEnteredValue',
     },
   }]);
-  invalidateNativeTableRegistryCache_(getTableSpreadsheetId_(table));
   return nextRowNumber;
 }
 
@@ -760,8 +632,6 @@ function getNextNativeAppendRowNumber_(table) {
 }
 
 function importNativeRecords_(table, records) {
-  table = getTableOrThrow_(table.key, true);
-  assertTableWritable_(table);
   const headers = getNativeHeaders_(table);
   const computedByHeader = getFormulaColumnByHeader_(table, headers);
   const rows = records
@@ -785,7 +655,6 @@ function importNativeRecords_(table, records) {
       fields: 'userEnteredValue',
     },
   }]);
-  invalidateNativeTableRegistryCache_(getTableSpreadsheetId_(table));
   return rows.length;
 }
 
@@ -887,29 +756,12 @@ function getWritableTableForPayload_(tableKey) {
   }
 }
 
-function getWritableTableForRow_(tableKey, rowNumber) {
-  let table = getWritableTableForPayload_(tableKey);
-  if (isNativeReadableTable_(table) && !isNativeRowNumberInRange_(table, Number(rowNumber))) {
-    table = getTableOrThrow_(tableKey, true);
-  }
-  return table;
-}
-
 function getSheet_(table) {
   const spreadsheetId = getTableSpreadsheetId_(table);
   let spreadsheet;
   try {
     spreadsheet = SpreadsheetApp.openById(spreadsheetId);
   } catch (error) {
-    logAppDiagnostic_('error', 'spreadsheet_open_failed', {
-      operation: 'SpreadsheetApp.openById',
-      spreadsheetId,
-      tableKey: table.key || '',
-      tableName: table.name || table.sheetName || '',
-      sheetName: table.sheetName || '',
-      gid: table.gid || '',
-      binding: table.binding || '',
-    }, error);
     throw new Error(`Cannot open data spreadsheet for ${table.name || table.sheetName || 'table'} (${spreadsheetId}). ${error && error.message ? error.message : String(error)}`);
   }
   let sheet = table.sheetName ? spreadsheet.getSheetByName(table.sheetName) : null;
@@ -1059,45 +911,9 @@ function createDataRowPayload_(headers, rowNumber, values) {
   return {
     rowNumber,
     id: normalized[0] || `row-${rowNumber}`,
-    recordId: findRecordIdValue_(headers, normalized),
     values: normalized,
     record: toRecord_(headers, normalized),
   };
-}
-
-function findRecordIdValue_(headers, values) {
-  const candidates = (headers || []).map((header, index) => ({
-    index,
-    name: String(header || '').trim().toLowerCase().replace(/[\s-]+/g, '_'),
-  }));
-  const idColumn = candidates.find((candidate) => candidate.name === 'id') ||
-    candidates.find((candidate) => /_id$/.test(candidate.name));
-  return idColumn && values[idColumn.index] != null ? String(values[idColumn.index]) : '';
-}
-
-function readSavedRecordRow_(table, rowNumber) {
-  const targetRow = Number(rowNumber || 0);
-  if (!targetRow) return null;
-
-  let sheet;
-  let headers;
-  let startColumn;
-  if (isNativeReadableTable_(table)) {
-    sheet = getNativeSheet_(table);
-    headers = getNativeHeaderList_(table, readNativeTableHeaderRow_(table));
-    startColumn = Number(table.apiRange && table.apiRange.startColumnIndex || 0) + 1;
-  } else {
-    sheet = getSheet_(table);
-    const layout = getSystemTableLayout_(sheet, table);
-    headers = layout.headers;
-    startColumn = layout.dataStartColumn;
-  }
-
-  if (!headers || !headers.length) return null;
-  const values = sheet
-    .getRange(targetRow, startColumn, 1, headers.length)
-    .getDisplayValues()[0] || [];
-  return createDataRowPayload_(headers, targetRow, values);
 }
 
 function isNonBlankDisplayRow_(values) {
@@ -1108,11 +924,7 @@ function readLatestSystemDataRows_(sheet, layout, headers, limit, options) {
   const dataStartRow = Number(layout.dataStartRow || DATA_START_ROW);
   const dataStartColumn = Number(layout.dataStartColumn || DATA_START_COLUMN);
   const width = headers.length;
-  const requestedEndRow = Math.round(Number(options && options.endRow || 0));
-  const lastRow = requestedEndRow > 0
-    ? Math.min(requestedEndRow, Number(sheet.getMaxRows() || requestedEndRow))
-    : Number(sheet.getLastRow() || 0);
-  const maxRows = Math.max(0, lastRow - dataStartRow + 1);
+  const maxRows = Math.max(0, Number(sheet.getLastRow() || 0) - dataStartRow + 1);
   if (!maxRows) return { rows: [], truncated: false };
 
   const rangeOptions = {
@@ -1141,11 +953,7 @@ function readLatestNativeDataRows_(table, headers, limit, options) {
   const startColumn = Number(range.startColumnIndex || 0) + 1;
   const tableEndRow = Number(range.endRowIndex || 0);
   const sheetLastRow = Number(sheet.getLastRow() || 0);
-  const requestedEndRow = Math.round(Number(options && options.endRow || 0));
-  const currentEndRow = Math.max(tableEndRow, sheetLastRow, dataStartRow - 1);
-  const lastRow = requestedEndRow > 0
-    ? Math.max(dataStartRow - 1, Math.min(requestedEndRow, Number(sheet.getMaxRows() || requestedEndRow)))
-    : currentEndRow;
+  const lastRow = tableEndRow || Math.max(sheetLastRow, dataStartRow - 1);
   const rowCount = Math.max(0, lastRow - dataStartRow + 1);
   if (!rowCount || !width) return { rows: [], truncated: false };
 
@@ -1180,8 +988,7 @@ function readLatestRowsFromRange_(sheet, options) {
   let skipped = 0;
   let cursor = startRow + rowCount - 1;
   while (cursor >= startRow && latest.length <= limit) {
-    const remainingNeeded = Math.max(1, limit + offset + 1 - latest.length - skipped);
-    const chunkHeight = Math.min(TABLE_READ_CHUNK_SIZE, remainingNeeded, cursor - startRow + 1);
+    const chunkHeight = Math.min(TABLE_READ_CHUNK_SIZE, cursor - startRow + 1);
     const chunkStart = cursor - chunkHeight + 1;
     const values = sheet.getRange(chunkStart, startColumn, chunkHeight, width).getDisplayValues();
     for (let index = values.length - 1; index >= 0 && latest.length <= limit; index -= 1) {

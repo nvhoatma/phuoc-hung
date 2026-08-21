@@ -117,9 +117,11 @@ function doGet(e) {
   if (!access.ok) return renderAccessDenied_(access);
 
   const params = e && e.parameter ? e.parameter : {};
+  if (params.hardRefresh) invalidateDataCache_();
+
   const action = params.action || '';
   if (action) return runAction_(action, params);
-  return renderApp_();
+  return renderApp_({ hardRefresh: !!params.hardRefresh });
 }
 
 function runAction_(action, params) {
@@ -147,9 +149,10 @@ function jsonResponse_(payload) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function renderApp_() {
+function renderApp_(options) {
   const template = HtmlService.createTemplateFromFile('Index');
   template.webAppUrl = ScriptApp.getService().getUrl();
+  template.hardRefresh = !!(options && options.hardRefresh);
   return template
     .evaluate()
     .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover')
@@ -177,18 +180,17 @@ function syncConfigAppGeneratedRows() {
 
 function hardRefreshAppSettings() {
   assertSpreadsheetAccess_();
-  const invalidation = invalidateDataCache_({ strict: true });
+  invalidateDataCache_();
+  const bootstrap = getAppBootstrap(true);
+  const runtimeConfig = getUserAppRuntimeConfig(true);
+  bootstrap.uiConfig = runtimeConfig;
   return sanitizeClientPayload_({
     ok: true,
-    clearedServerCache: invalidation.ok === true,
-    invalidation,
-    refreshedAt: new Date().toISOString(),
+    bootstrap,
+    runtimeConfig,
+    clearedServerCache: true,
+    updatedAt: new Date().toISOString(),
   });
-}
-
-// Backward-compatible API for older clients.
-function refreshAppDataCache() {
-  return hardRefreshAppSettings();
 }
 
 function syncViewConfigSchema_() {
@@ -270,10 +272,6 @@ function getAppBootstrap(forceRefresh) {
   });
 }
 
-function getAppCacheManifest() {
-  return getAppChangeManifest();
-}
-
 function getBootstrapInitialItem_(navigation, uiConfig) {
   const items = flattenBootstrapNavItems_(navigation || []);
   const app = uiConfig && uiConfig.app ? uiConfig.app : {};
@@ -334,32 +332,8 @@ function normalizeBootstrapLandingKey_(value) {
 }
 
 function getUserAppRuntimeConfig(forceRefresh) {
-  const startedAt = Date.now();
-  let stage = 'assert_spreadsheet_access';
-  let access = null;
-  try {
-    access = assertSpreadsheetAccess_();
-    stage = 'build_user_app_config';
-    logAppDiagnostic_('info', 'config_hydration_started', {
-      forceRefresh: !!forceRefresh,
-      primarySpreadsheetId: access.spreadsheetId || SPREADSHEET_ID,
-    });
-    const config = getUserAppConfig_(!!forceRefresh, { deferDataConfig: false });
-    logAppDiagnostic_('info', 'config_hydration_completed', {
-      forceRefresh: !!forceRefresh,
-      primarySpreadsheetId: access.spreadsheetId || SPREADSHEET_ID,
-      durationMs: Date.now() - startedAt,
-    });
-    return sanitizeClientPayload_(config);
-  } catch (error) {
-    logAppDiagnostic_('error', 'config_hydration_failed', {
-      stage,
-      forceRefresh: !!forceRefresh,
-      primarySpreadsheetId: access && access.spreadsheetId ? access.spreadsheetId : SPREADSHEET_ID,
-      durationMs: Date.now() - startedAt,
-    }, error);
-    throw error;
-  }
+  assertSpreadsheetAccess_();
+  return sanitizeClientPayload_(getUserAppConfig_(!!forceRefresh, { deferDataConfig: false }));
 }
 
 function getBootstrapTableSchemas(forceRefresh) {

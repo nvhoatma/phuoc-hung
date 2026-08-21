@@ -4,12 +4,6 @@
       Mobile record-card markup lives in ClientMobileViews.html.
     */
     function renderPage() {
-      if (state.tableHydrationTicker) {
-        window.clearInterval(state.tableHydrationTicker);
-        state.tableHydrationTicker = null;
-      }
-      const topbarBenchmark = document.querySelector('[data-table-load-benchmark]');
-      if (topbarBenchmark) topbarBenchmark.hidden = true;
       syncAppModeShell();
       if (state.appMode === 'config') {
         renderConfigApp();
@@ -47,7 +41,6 @@
       const rows = filteredRows();
       el.content.innerHTML = renderTablePanel(table, rows);
       bindTableEvents();
-      refreshTableHydrationIndicator();
       restoreMasterListScroll();
       if (typeof enhanceImagePreviewSafe === 'function') enhanceImagePreviewSafe('detail');
       scheduleApplyLanguage();
@@ -129,8 +122,8 @@
         <section class="panel route-loading-panel hard-refresh-panel">
           <div class="route-loading-head">
             <div>
-              <strong>Refreshing app</strong>
-              <span>Loading the latest data and configuration</span>
+              <strong>Refreshing settings</strong>
+              <span>Loading the latest app configuration</span>
             </div>
             <i aria-hidden="true"></i>
           </div>
@@ -202,7 +195,6 @@
     }
 
     function bindOverviewEvents() {
-      if (typeof enhanceSelectSearch === 'function') enhanceSelectSearch(document);
       document.querySelectorAll('[data-overview-filter]').forEach((select) => {
         select.addEventListener('change', () => updateOverviewFilter(select.dataset.overviewFilter, select.value));
       });
@@ -356,21 +348,23 @@
         : `Data range starts from column ${columnName(table.dataStartColumn || 8)}`;
       const canWrite = !(table && table.readOnly);
       const allowCreate = canWrite && canCreateRows();
-      const serverPage = state.tableData && state.tableData.serverPage ? state.tableData.serverPage : null;
-      const recordCount = serverPage ? Number(serverPage.totalRows || serverPage.totalEstimate || 0) : state.tableData.rows.length;
+      const recordCount = state.tableData.rows.length;
       const groupFields = getActiveGroupFields(headers);
       const stats = makeTableStats(headers, rows, groupFields);
-      const pageRows = rows;
+      const pagination = getTablePagination(rows);
+      const pageRows = paginatedRows(rows);
       const dataWindow = state.tableData ? state.tableData.dataWindow || null : null;
-      const dataWindowNote = !serverPage && dataWindow && dataWindow.truncated
+      const hydration = state.activeTableKey && state.tableHydration ? state.tableHydration[state.activeTableKey] : null;
+      const hydrating = !!(dataWindow && dataWindow.initial && hydration && hydration.status === 'loading');
+      const dataWindowNote = dataWindow && dataWindow.truncated
         ? ` - latest ${dataWindow.rowLimit || recordCount} rows loaded`
         : '';
-      const hydrationNote = state.tableDataLoading ? ' - loading data...' : '';
+      const hydrationNote = hydrating ? ' - loading more rows...' : '';
       const panelTitle = pageConfig && pageConfig.label ? pageConfig.label : table.name;
       const panelSubtitle = pageConfig && pageConfig.subtitle ? pageConfig.subtitle : `${table.sheetName} - ${bindingLabel} - ${recordCount} records${dataWindowNote}${hydrationNote}`;
       const viewTypes = getEnabledTableViewTypes();
       return `
-        <section class="panel table-panel ${state.tableDataLoading ? 'data-loading' : ''}" aria-busy="${state.tableDataLoading ? 'true' : 'false'}">
+        <section class="panel table-panel">
           <div class="panel-header">
             <div class="panel-title">
               <strong>${escapeHtml(panelTitle)}</strong>
@@ -389,70 +383,41 @@
             </div>
           </div>
           ${state.tableViewMode === 'detail' || !isComponentEnabled('grouping', true) ? '' : renderTableControlStrip(groupFields, stats)}
+          ${renderTablePagination(pagination, dataWindow)}
           ${state.tableViewMode === 'detail'
             ? renderMasterDetailView(headers, pageRows, groupFields, stats)
             : state.tableViewMode === 'card'
             ? renderCardView(headers, pageRows, groupFields)
-            : document.body.classList.contains('mobile-viewport')
-            ? renderMobileRecordList(headers, pageRows)
-            : renderTableGrid(headers, pageRows, groupFields)}
+            : `${renderMobileRecordList(headers, pageRows)}${renderTableGrid(headers, pageRows, groupFields)}`}
         </section>
       `;
     }
 
-    function refreshTableHydrationIndicator() {
-      const node = document.querySelector('[data-table-load-benchmark]');
-      const hydration = state.tableHydration[state.activeTableKey] || null;
-      const active = hydration && ['scheduled', 'loading', 'retrying'].includes(hydration.status);
-      if (node) node.hidden = true;
-      if (!hydration) {
-        if (state.tableHydrationTicker) window.clearInterval(state.tableHydrationTicker);
-        state.tableHydrationTicker = null;
-        return;
-      }
-      if (!node) return;
-      const rows = Math.max(0, Number(hydration.rows || hydration.initialRows || 0));
-      const totalRows = Math.max(rows, Number(hydration.totalRows || 0));
-      const durationMs = hydration.status === 'ready'
-        ? Number(hydration.durationMs || 0)
-        : Math.max(0, Date.now() - Number(hydration.startedAt || Date.now()));
-      const durationLabel = formatTableLoadDuration(durationMs);
-      const label = node.querySelector('span');
-      node.hidden = false;
-      node.classList.toggle('loading', !!active);
-      node.classList.toggle('complete', hydration.status === 'ready');
-      node.classList.toggle('retrying', hydration.status === 'retrying');
-      if (label) {
-        label.textContent = hydration.status === 'ready'
-          ? hydration.source === 'localStorage'
-            ? `Loaded ${rows} rows from cache in ${durationLabel}`
-            : `Loaded ${rows} rows in ${durationLabel}`
-          : hydration.status === 'retrying'
-          ? `Loading data ${rows}/${totalRows} - retrying - ${durationLabel}`
-          : `Loading data ${rows}/${totalRows} - ${durationLabel}`;
-      }
-      if (active && !state.tableHydrationTicker) {
-        state.tableHydrationTicker = window.setInterval(refreshTableHydrationIndicator, 500);
-      } else if (!active && state.tableHydrationTicker) {
-        window.clearInterval(state.tableHydrationTicker);
-        state.tableHydrationTicker = null;
-      }
-    }
-
-    function formatTableLoadDuration(durationMs) {
-      const value = Math.max(0, Number(durationMs || 0));
-      if (value < 1000) return `${Math.round(value)}ms`;
-      return `${(value / 1000).toFixed(1)}s`;
+    function renderTablePagination(pagination, dataWindow) {
+      if (!pagination || pagination.totalRows <= 0) return '';
+      const start = pagination.totalRows ? pagination.startIndex + 1 : 0;
+      const capped = dataWindow && dataWindow.truncated;
+      if (pagination.pageCount <= 1) return '';
+      return `
+        <div class="table-pagination">
+          <div class="table-pagination-meta">
+            <strong>${start}-${pagination.endIndex}</strong>
+            <span>of ${pagination.totalRows}</span>
+            ${capped ? `<em>Latest ${dataWindow.rowLimit || 2000}</em>` : ''}
+          </div>
+          <div class="table-pagination-controls">
+            <button class="page-btn" type="button" data-page-action="prev" ${pagination.page <= 1 ? 'disabled' : ''} aria-label="Previous page">${ICONS.chevronLeft || '‹'}</button>
+            <span>Page ${pagination.page} / ${pagination.pageCount}</span>
+            <button class="page-btn" type="button" data-page-action="next" ${pagination.page >= pagination.pageCount ? 'disabled' : ''} aria-label="Next page">${ICONS.chevronRight || '›'}</button>
+            <select class="page-size-select" data-page-size aria-label="Rows per page">
+              ${[50, 100, 200, 500, 1000, 2000].map((size) => `<option value="${size}" ${pagination.pageSize === size ? 'selected' : ''}>${size}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+      `;
     }
 
     function renderSmartFilterControl(headers) {
-      if (state.tableDataLoading) {
-        return `
-          <div class="filter-menu filter-menu-loading" role="status" aria-live="polite">
-            ${ICONS.filter || ICONS.sliders}<span>Loading data...</span><i aria-hidden="true"></i>
-          </div>
-        `;
-      }
       const filterHeaders = getSmartFilterHeaders(headers);
       const activeCount = getActiveFilterValueCount();
       const hasActive = activeCount > 0;
@@ -503,11 +468,10 @@
       if (!options.length) return '';
       const selected = new Set((state.tableFilters && state.tableFilters[header]) || []);
       const isOpen = isSmartFilterGroupOpen(header, options, selected);
-      const renderedOptions = isOpen ? options : [];
       const groupSearchText = getFilterSearchText([header, getFieldLabel(header)].concat(options.map((option) => option.value)));
       const labelSearchText = getFilterSearchText([header, getFieldLabel(header)]);
       return `
-        <details class="filter-group" data-filter-group="${escapeAttr(header)}" data-filter-options-loaded="${isOpen ? '1' : '0'}" data-filter-search="${escapeAttr(groupSearchText)}" data-filter-label="${escapeAttr(labelSearchText)}" ${isOpen ? 'open' : ''}>
+        <details class="filter-group" data-filter-group="${escapeAttr(header)}" data-filter-search="${escapeAttr(groupSearchText)}" data-filter-label="${escapeAttr(labelSearchText)}" ${isOpen ? 'open' : ''}>
           <summary>
             <span class="filter-group-icon">${isOpen ? ICONS.chevronDown : ICONS.chevronRight}</span>
             <strong>${escapeHtml(getFieldLabel(header))}</strong>
@@ -515,7 +479,7 @@
             ${selected.size ? `<button type="button" data-clear-filter-field="${escapeAttr(header)}">Clear</button>` : ''}
           </summary>
           <div class="filter-options">
-            ${renderedOptions.map((option) => `
+            ${options.map((option) => `
               <label class="filter-option ${selected.has(option.value) ? 'checked' : ''}" data-filter-option data-filter-search="${escapeAttr(getFilterSearchText([header, getFieldLabel(header), option.value]))}">
                 <input type="checkbox" data-filter-checkbox data-filter-header="${escapeAttr(header)}" data-filter-value="${escapeAttr(option.value)}" ${selected.has(option.value) ? 'checked' : ''}>
                 <span>${escapeHtml(option.value || 'Blank')}</span>
@@ -593,6 +557,7 @@
       });
       const result = Object.keys(counts)
         .sort((a, b) => counts[b] - counts[a] || a.localeCompare(b, 'vi', { numeric: true }))
+        .slice(0, 18)
         .map((value) => ({ value, count: counts[value] }));
       state.filterOptionsCache[cacheKey] = result;
       return result;
@@ -1168,7 +1133,6 @@
     }
 
     function renderNestedTables(formConfig, parentRecord) {
-      if (!formConfig || formConfig.nestedTablesExplicit !== true) return '';
       const nested = (formConfig && formConfig.nestedTables) || [];
       if (!nested.length) return '';
       const cards = nested.map((name) => renderNestedTableCard(name, parentRecord)).filter(Boolean);
@@ -1184,7 +1148,6 @@
     }
 
     function getNestedFormStepItems(formConfig, parentRecord) {
-      if (!formConfig || formConfig.nestedTablesExplicit !== true) return [];
       const nested = (formConfig && formConfig.nestedTables) || [];
       return nested.map((name, index) => {
         const html = renderNestedTableCard(name, parentRecord);
@@ -1226,7 +1189,7 @@
       }
       const data = table.key === state.activeTableKey && state.tableData
         ? state.tableData
-        : state.dataCache[getTableRuntimeCacheKey(table.key)];
+        : state.dataCache[`table:${table.key}`];
       const relationship = getRelationshipForNestedTable(name);
       if (!relationship) return '';
       const allRows = data && data.rows ? data.rows : [];
@@ -1377,7 +1340,7 @@
       nested.forEach((name) => {
         const table = findBootstrapTableByName(name);
         if (!table || !table.key || table.key === state.activeTableKey) return;
-        const cacheKey = getTableRuntimeCacheKey(table.key);
+        const cacheKey = `table:${table.key}`;
         if (state.dataCache[cacheKey] || state.inFlight[cacheKey]) return;
         requested = true;
         fetchItemData({ tableKey: table.key }).then(() => {
@@ -1656,8 +1619,7 @@
         statusFilter.addEventListener('change', (event) => {
           state.status = event.target.value;
           resetTablePage();
-          updateDetailSelectionAfterFilters();
-          renderPagePreservingTableFocus();
+          renderPage();
         });
       }
       const filterMenu = document.querySelector('.filter-menu');
@@ -1694,10 +1656,6 @@
           if (group.open) expanded[header] = true;
           else delete expanded[header];
           state.expandedFilterGroups = expanded;
-          if (group.open && group.dataset.filterOptionsLoaded !== '1') {
-            renderPagePreservingTableFocus();
-            return;
-          }
           const icon = group.querySelector('.filter-group-icon');
           if (icon) icon.innerHTML = group.open ? ICONS.chevronDown : ICONS.chevronRight;
         });
@@ -1728,9 +1686,27 @@
           state.tableFilters = {};
           resetTablePage();
           updateDetailSelectionAfterFilters();
-          renderPagePreservingTableFocus();
+          renderPage();
         });
       });
+      document.querySelectorAll('[data-page-action]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const rows = filteredRows();
+          const pagination = getTablePagination(rows);
+          if (button.dataset.pageAction === 'prev') state.tablePage = Math.max(1, pagination.page - 1);
+          if (button.dataset.pageAction === 'next') state.tablePage = Math.min(pagination.pageCount, pagination.page + 1);
+          renderPage();
+        });
+      });
+      const pageSize = document.querySelector('[data-page-size]');
+      if (pageSize) {
+        pageSize.addEventListener('change', () => {
+          state.tablePageSize = Number(pageSize.value || 2000);
+          setStoredPreference('tablePageSize', state.tablePageSize);
+          resetTablePage();
+          renderPage();
+        });
+      }
       document.querySelectorAll('[data-table-view]').forEach((button) => {
         button.addEventListener('click', () => {
           const nextMode = button.dataset.tableView || 'table';
@@ -1801,8 +1777,7 @@
             direction: state.sort.header === header ? state.sort.direction * -1 : 1,
           };
           resetTablePage();
-          updateDetailSelectionAfterFilters();
-          renderPagePreservingTableFocus();
+          renderPage();
         });
       });
       document.querySelectorAll('[data-sort-field]').forEach((button) => {
@@ -1813,7 +1788,7 @@
           };
           resetTablePage();
           updateDetailSelectionAfterFilters();
-          renderPagePreservingTableFocus();
+          renderPage();
         });
       });
       const clearSort = document.querySelector('[data-clear-sort]');
@@ -1822,7 +1797,7 @@
           state.sort = { header: '', direction: 1 };
           resetTablePage();
           updateDetailSelectionAfterFilters();
-          renderPagePreservingTableFocus();
+          renderPage();
         });
       }
       document.querySelectorAll('[data-header]').forEach((headerCell) => {
@@ -1935,7 +1910,7 @@
       state.tableFilters = filters;
       resetTablePage();
       updateDetailSelectionAfterFilters();
-      renderPagePreservingTableFocus();
+      renderPage();
     }
 
     function removeTableFilterValue(header, value) {
@@ -1949,7 +1924,7 @@
       state.tableFilters = filters;
       resetTablePage();
       updateDetailSelectionAfterFilters();
-      renderPagePreservingTableFocus();
+      renderPage();
     }
 
     function updateDetailSelectionAfterFilters() {
@@ -2004,7 +1979,7 @@
       await ensureUiConfigHydratedForForms();
       let data = tableKey === state.activeTableKey && state.tableData
         ? state.tableData
-        : state.dataCache[getTableRuntimeCacheKey(tableKey)];
+        : state.dataCache[`table:${tableKey}`];
       if (!data) data = await fetchItemData({ tableKey });
       if (!data) return;
       data = await ensureTableFieldSchemaForForms(tableKey, data);
@@ -2069,10 +2044,19 @@
     }
 
     function scheduleSearchRender(input, delay = 140) {
+      const selectionStart = input.selectionStart;
+      const selectionEnd = input.selectionEnd;
       window.clearTimeout(state.searchRenderTimer);
       state.searchRenderTimer = window.setTimeout(() => {
-        updateDetailSelectionAfterFilters();
-        renderPagePreservingTableFocus();
+        renderPage();
+        const nextInput = document.getElementById('searchInput');
+        if (!nextInput) return;
+        nextInput.focus({ preventScroll: true });
+        if (typeof nextInput.setSelectionRange === 'function' && selectionStart !== null && selectionEnd !== null) {
+          const caretStart = Math.min(selectionStart, nextInput.value.length);
+          const caretEnd = Math.min(selectionEnd, nextInput.value.length);
+          nextInput.setSelectionRange(caretStart, caretEnd);
+        }
       }, delay);
     }
 
@@ -2399,48 +2383,28 @@
 
     function normalizeFormFields(fieldsOrHeaders) {
       return (fieldsOrHeaders || []).map((field, index) => {
-        const source = typeof field === 'string'
-          ? { name: field, label: field, index, inputType: inputTypeForHeader(field), validation: null }
-          : field;
-        const name = source.name || source.label || '';
-        const configured = getConfiguredFormField(name);
-        const validation = source.validation || null;
-        const options = validation && Array.isArray(validation.options) ? validation.options : [];
-        const inputType = configured.inputType || source.inputType || inputTypeForHeader(name);
-        const editingData = typeof getEditingTableData === 'function' ? getEditingTableData() : state.tableData;
-        const optionsLoading = inputType === 'select' && !options.length && needsFullFieldSchema(editingData);
         if (typeof field === 'string') {
-          return Object.assign({}, source, configured, { name, optionsLoading });
+          return { name: field, label: field, index, inputType: inputTypeForHeader(field), validation: null };
         }
+        const name = field.name || field.label || '';
         return {
           name,
-          label: configured.label || source.label || name,
-          index: source.index == null ? index : source.index,
-          inputType,
-          validation,
-          required: configured.required == null ? !!source.required : !!configured.required,
-          computed: !!(source.computed || source.formulaDriven || source.editable === false),
-          editable: source.editable !== false,
-          formulaDriven: !!source.formulaDriven,
-          hidden: configured.hidden == null ? !!source.hidden : !!configured.hidden,
-          sortOrder: configured.sortOrder == null ? source.sortOrder : configured.sortOrder,
-          groupable: configured.groupable == null ? source.groupable !== false : configured.groupable !== false,
-          defaultGroup: configured.defaultGroup == null ? !!source.defaultGroup : !!configured.defaultGroup,
-          groupOrder: configured.groupOrder == null ? source.groupOrder : configured.groupOrder,
-          section: configured.section || source.section || '',
-          optionsLoading,
+          label: field.label || name,
+          index: field.index == null ? index : field.index,
+          inputType: field.inputType || inputTypeForHeader(name),
+          validation: field.validation || null,
+          required: !!field.required,
+          computed: !!(field.computed || field.formulaDriven || field.editable === false),
+          editable: field.editable !== false,
+          formulaDriven: !!field.formulaDriven,
+          hidden: !!field.hidden,
+          sortOrder: field.sortOrder,
+          groupable: field.groupable !== false,
+          defaultGroup: !!field.defaultGroup,
+          groupOrder: field.groupOrder,
+          section: field.section || '',
         };
       }).filter((field) => field.name && !field.hidden);
-    }
-
-    function getConfiguredFormField(fieldName) {
-      const tableKey = (state.editing && state.editing.tableKey) || state.activeTableKey || '';
-      const config = typeof getUiConfig === 'function' ? getUiConfig() : state.uiConfig || {};
-      const byTableKey = config && config.dataColumns && config.dataColumns.byTableKey
-        ? config.dataColumns.byTableKey
-        : {};
-      const fields = byTableKey[tableKey] || {};
-      return fields[normalizeClientConfigKey(fieldName)] || {};
     }
 
     function renderFieldInput(field, value, index) {
@@ -2460,15 +2424,10 @@
       const required = field.required && !readOnly && !computed ? ' required' : '';
       const computedTitle = computed && !title ? ' title="Calculated by Google Sheet formula"' : title;
 
-      if (inputType === 'select') {
-        const loading = !!field.optionsLoading;
-        const currentOption = value && !options.includes(value)
-          ? `<option value="${escapeAttr(value)}" selected>${escapeHtml(value)}</option>`
-          : '';
+      if (options.length && inputType === 'select') {
         return `
-          <select class="field" name="${name}" data-select-options-loading="${loading ? '1' : '0'}" aria-busy="${loading ? 'true' : 'false'}"${computedTitle}${disabled}${required}>
-            <option value="">${loading ? 'Loading options...' : ''}</option>
-            ${currentOption}
+          <select class="field" name="${name}"${computedTitle}${disabled}${required}>
+            <option value=""></option>
             ${options.map((option) => `<option value="${escapeAttr(option)}"${option === value ? ' selected' : ''}>${escapeHtml(option)}</option>`).join('')}
           </select>
         `;
@@ -2488,65 +2447,7 @@
         return `<textarea class="field" name="${name}"${computedTitle}${disabled}${required}>${escapeHtml(value)}</textarea>`;
       }
 
-      const step = inputType === 'number' ? ' step="any"' : '';
-      const inputValue = inputType === 'date' ? normalizeDateInputValue(value) : value;
-      return `<input class="field" type="${escapeAttr(inputType)}" name="${name}" value="${escapeAttr(inputValue)}"${step}${computedTitle}${disabled}${required}>`;
-    }
-
-    function normalizeDateInputValue(value) {
-      if (value == null || value === '') return '';
-      if (value instanceof Date && !Number.isNaN(value.getTime())) return formatLocalDateInputValue(value);
-      const text = String(value).trim();
-      if (!text) return '';
-
-      const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
-      if (dateOnly) return `${dateOnly[1]}-${dateOnly[2]}-${dateOnly[3]}`;
-
-      if (/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+\-]\d{2}:?\d{2})$/i.test(text)) {
-        const zonedDate = new Date(text);
-        if (!Number.isNaN(zonedDate.getTime())) return formatLocalDateInputValue(zonedDate);
-      }
-
-      const yearFirst = /^(\d{4})[\/.](\d{1,2})[\/.](\d{1,2})(?:\s|T|$)/.exec(text);
-      if (yearFirst) return formatDateInputParts(yearFirst[1], yearFirst[2], yearFirst[3]);
-
-      const dayFirst = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})(?:\s|T|$)/.exec(text);
-      if (dayFirst) {
-        const first = Number(dayFirst[1]);
-        const second = Number(dayFirst[2]);
-        const monthFirst = second > 12 || (first <= 12 && second <= 12 && isMonthFirstBrowserLocale());
-        return monthFirst
-          ? formatDateInputParts(dayFirst[3], first, second)
-          : formatDateInputParts(dayFirst[3], second, first);
-      }
-
-      const parsed = new Date(text);
-      return Number.isNaN(parsed.getTime()) ? '' : formatLocalDateInputValue(parsed);
-    }
-
-    function formatLocalDateInputValue(date) {
-      return formatDateInputParts(date.getFullYear(), date.getMonth() + 1, date.getDate());
-    }
-
-    function formatDateInputParts(year, month, day) {
-      const numericYear = Number(year);
-      const numericMonth = Number(month);
-      const numericDay = Number(day);
-      const date = new Date(numericYear, numericMonth - 1, numericDay);
-      if (date.getFullYear() !== numericYear || date.getMonth() !== numericMonth - 1 || date.getDate() !== numericDay) return '';
-      return `${numericYear}-${padDateInputPart(numericMonth)}-${padDateInputPart(numericDay)}`;
-    }
-
-    function isMonthFirstBrowserLocale() {
-      try {
-        return /^en-US\b/i.test(navigator.language || '');
-      } catch (error) {
-        return false;
-      }
-    }
-
-    function padDateInputPart(value) {
-      return String(value).padStart(2, '0');
+      return `<input class="field" type="${escapeAttr(inputType)}" name="${name}" value="${escapeAttr(value)}"${computedTitle}${disabled}${required}>`;
     }
 
     function isComputedField(field) {

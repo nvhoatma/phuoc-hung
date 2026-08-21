@@ -1,23 +1,18 @@
 {
   "timeZone": "Asia/Bangkok",
   "dependencies": {
-    "enabledAdvancedServices": [
-      {
-        "userSymbol": "Sheets",
-        "serviceId": "sheets",
-        "version": "v4"
-      }
-    ]
+    "enabledAdvancedServices": [{
+      "userSymbol": "Sheets",
+      "serviceId": "sheets",
+      "version": "v4"
+    }]
   },
   "webapp": {
-    "executeAs": "USER_ACCESSING",
-    "access": "ANYONE"
+    "access": "ANYONE",
+    "executeAs": "USER_ACCESSING"
   },
   "exceptionLogging": "STACKDRIVER",
-  "oauthScopes": [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/userinfo.email"
-  ],
+  "oauthScopes": ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/userinfo.email"],
   "executionApi": {
     "access": "MYSELF"
   },

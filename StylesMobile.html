@@ -67,19 +67,7 @@
     }
 
     body.mobile-viewport .topbar-title {
-      width: auto;
-      flex: 1 1 auto;
-    }
-
-    body.mobile-viewport .topbar .topbar-load-benchmark {
-      max-width: 46vw;
-      padding: 5px 8px;
-    }
-
-    body.mobile-viewport .topbar .topbar-load-benchmark span {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      width: 100%;
     }
 
     body.mobile-viewport .breadcrumb {
@@ -173,6 +161,19 @@
       min-height: 50px;
       border-radius: 10px;
       font-size: 16px;
+    }
+
+    body.mobile-viewport .table-pagination {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+      padding: 9px 12px;
+    }
+
+    body.mobile-viewport .table-pagination-meta,
+    body.mobile-viewport .table-pagination-controls {
+      justify-content: space-between;
+      width: 100%;
     }
 
     body.mobile-viewport .table-actions,
@@ -508,4 +509,3 @@
     body.mobile-viewport .drawer.advanced .form-control.full {
       grid-column: 1;
     }
-

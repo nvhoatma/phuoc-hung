@@ -68,8 +68,7 @@
       } else if (/color|colour|hex/i.test(field.name)) {
         control = `<div class="config-color-field"><input class="field" type="text" name="${name}" value="${escapeAttr(value)}"><span style="background:${escapeAttr(value || '#ffffff')}"></span></div>`;
       } else {
-        const step = inputType === 'number' ? ' step="any"' : '';
-        control = `<input class="field" type="${escapeAttr(inputType)}" name="${name}" value="${escapeAttr(value)}"${step}>`;
+        control = `<input class="field" type="${escapeAttr(inputType)}" name="${name}" value="${escapeAttr(value)}">`;
       }
       const displayLabel = getConfigFieldDisplayLabel(field);
       return `

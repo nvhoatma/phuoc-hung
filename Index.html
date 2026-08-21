@@ -53,9 +53,6 @@
             <h1 id="pageTitle">Loading</h1>
           </div>
         </div>
-        <span class="table-load-benchmark topbar-load-benchmark" data-table-load-benchmark role="status" aria-live="polite" hidden>
-          <i aria-hidden="true"></i><span></span>
-        </span>
       </header>
       <section class="content" id="content">
         <section class="panel route-loading-panel">
@@ -86,10 +83,6 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><path d="M14 16h6M17 13v6"/></svg>
       <span>Shell app</span>
     </button>
-    <button class="mode-icon-switcher hard-refresh-toggle" type="button" data-hard-refresh title="Hard refresh" aria-label="Clear cached data and settings, then reload app">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v6h-6"/></svg>
-      <span>Hard refresh</span>
-    </button>
     <div class="language-picker" data-language-picker>
       <button class="mode-icon-switcher language-toggle" type="button" data-language-toggle title="Language" aria-label="Change language" aria-expanded="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg>
@@ -117,8 +110,8 @@
         <span id="drawerSubtitle">Data binding vào Google Sheet</span>
       </div>
       <div class="drawer-header-actions">
-        <button class="btn drawer-tool-btn" id="aiInsightBtn" type="button" title="Copy AI context" style="display:none"></button>
         <button class="btn drawer-tool-btn" id="formModeToggleBtn" type="button" title="Switch form mode" style="display:none"></button>
+        <button class="btn drawer-tool-btn" id="aiInsightBtn" type="button" title="Copy AI context" style="display:none"></button>
         <button class="btn drawer-tool-btn" id="printFormBtn" type="button" title="Export form as PNG" style="display:none"></button>
         <button class="btn drawer-tool-btn" id="importBtn" type="button" title="Import records"></button>
       </div>
@@ -152,6 +145,7 @@
 
   <script>
     window.APP_WEB_APP_URL = <?!= JSON.stringify(webAppUrl || '') ?>;
+    window.APP_HARD_REFRESH_LOAD = <?!= JSON.stringify(!!hardRefresh) ?>;
     <? /*
       Client include order is intentional:
       state -> helpers -> navigation -> desktop views -> optional preview -> mobile views -> actions.
@@ -160,8 +154,6 @@
     <?!= include('ClientState'); ?>
 
     <?!= include('ClientHelpers'); ?>
-
-    <?!= include('ClientSelectSearch'); ?>
 
     <?!= include('ClientNavigation'); ?>
 
@@ -174,7 +166,6 @@
     <?!= include('ClientMobileViews'); ?>
 
     <?!= include('ClientActions'); ?>
-
   </script>
 </body>
 </html>

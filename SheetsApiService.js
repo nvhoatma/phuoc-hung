@@ -6,34 +6,15 @@
  */
 function sheetsApiGet_(spreadsheetId, fields) {
   const options = fields ? { fields } : {};
-  try {
-    return runSheetsApiRead_(() => Sheets.Spreadsheets.get(spreadsheetId, options));
-  } catch (error) {
-    logAppDiagnostic_('error', 'sheets_api_read_failed', {
-      operation: 'Sheets.Spreadsheets.get',
-      spreadsheetId: spreadsheetId || '',
-      fields: fields || '',
-    }, error);
-    throw error;
-  }
+  return runSheetsApiRead_(() => Sheets.Spreadsheets.get(spreadsheetId, options));
 }
 
 function sheetsApiGetByDataFilter_(spreadsheetId, dataFilters, fields) {
   const options = fields ? { fields } : {};
-  try {
-    return runSheetsApiRead_(() => Sheets.Spreadsheets.getByDataFilter({
-      dataFilters,
-      includeGridData: true,
-    }, spreadsheetId, options));
-  } catch (error) {
-    logAppDiagnostic_('error', 'sheets_api_read_failed', {
-      operation: 'Sheets.Spreadsheets.getByDataFilter',
-      spreadsheetId: spreadsheetId || '',
-      dataFilterCount: (dataFilters || []).length,
-      fields: fields || '',
-    }, error);
-    throw error;
-  }
+  return runSheetsApiRead_(() => Sheets.Spreadsheets.getByDataFilter({
+    dataFilters,
+    includeGridData: true,
+  }, spreadsheetId, options));
 }
 
 function sheetsApiBatchUpdate_(spreadsheetId, requests) {

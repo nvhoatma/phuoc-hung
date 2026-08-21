@@ -2,46 +2,6 @@ function normalizeName(name) {
   return String(name || '').trim().toLowerCase();
 }
 
-function appDiagnosticError_(error) {
-  return {
-    name: error && error.name ? String(error.name) : 'Error',
-    message: error && error.message ? String(error.message) : String(error || ''),
-    stack: error && error.stack ? String(error.stack) : '',
-  };
-}
-
-let APP_DIAGNOSTIC_TRACE_ID_ = '';
-
-function getAppDiagnosticTraceId_() {
-  if (!APP_DIAGNOSTIC_TRACE_ID_) {
-    APP_DIAGNOSTIC_TRACE_ID_ = Utilities.getUuid();
-  }
-  return APP_DIAGNOSTIC_TRACE_ID_;
-}
-
-function logAppDiagnostic_(level, event, details, error) {
-  let userEmail = '';
-  try {
-    userEmail = typeof getActiveUserEmail_ === 'function' ? getActiveUserEmail_() : '';
-  } catch (ignored) {
-    userEmail = '';
-  }
-
-  const payload = Object.assign({
-    diagnostic: true,
-    event: String(event || 'app_diagnostic'),
-    level: String(level || 'info'),
-    timestamp: new Date().toISOString(),
-    traceId: getAppDiagnosticTraceId_(),
-    userEmail,
-  }, details || {});
-  if (error) payload.error = appDiagnosticError_(error);
-
-  const method = console && typeof console[level] === 'function' ? console[level] : console.log;
-  method.call(console, JSON.stringify(payload));
-  return payload;
-}
-
 function sanitizeClientPayload_(value, seen) {
   if (value == null) return value;
   if (value instanceof Date) return value.toISOString();

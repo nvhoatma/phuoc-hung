@@ -11,8 +11,16 @@
 
     function renderModeSwitcher() {
       document.querySelectorAll('.app-mode-switcher').forEach((switcher) => {
-        const languagePicker = switcher.querySelector('[data-language-picker]');
-        if (languagePicker) languagePicker.toggleAttribute('hidden', state.appMode === 'config');
+        const currentUtility = switcher.querySelector('[data-language-picker], [data-hard-refresh]');
+        const expectedUtility = state.appMode === 'config' ? 'hard-refresh' : 'language-picker';
+        const currentType = currentUtility
+          ? (currentUtility.matches('[data-hard-refresh]') ? 'hard-refresh' : 'language-picker')
+          : '';
+        if (currentUtility && currentType !== expectedUtility) {
+          const wrapper = document.createElement('div');
+          wrapper.innerHTML = renderModeUtilityControl().trim();
+          currentUtility.replaceWith(wrapper.firstElementChild);
+        }
         switcher.querySelectorAll('[data-app-mode]').forEach((button) => {
           button.classList.toggle('active', button.dataset.appMode === state.appMode);
           if (button.dataset.appMode === 'config') button.toggleAttribute('hidden', !canOpenConfigApp());

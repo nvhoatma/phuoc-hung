@@ -57,6 +57,27 @@
         .join(';');
     }
 
+    function getTablePagination(rows) {
+      const totalRows = (rows || []).length;
+      const pageSize = Math.max(10, Number(state.tablePageSize || 50));
+      const pageCount = Math.max(1, Math.ceil(totalRows / pageSize));
+      const page = Math.min(Math.max(1, Number(state.tablePage || 1)), pageCount);
+      if (page !== state.tablePage) state.tablePage = page;
+      return {
+        page,
+        pageSize,
+        pageCount,
+        totalRows,
+        startIndex: (page - 1) * pageSize,
+        endIndex: Math.min(totalRows, page * pageSize),
+      };
+    }
+
+    function paginatedRows(rows) {
+      const pagination = getTablePagination(rows);
+      return (rows || []).slice(pagination.startIndex, pagination.endIndex);
+    }
+
     function resetTablePage() {
       state.tablePage = 1;
     }
@@ -410,7 +431,6 @@
         labelPosition: 'top',
         showEmptyFields: true,
       }, defaults || {}, form || {});
-      if (!merged.nestedTablesExplicit || !Array.isArray(merged.nestedTables)) merged.nestedTables = [];
       return merged;
     }
 
@@ -470,18 +490,7 @@
       if (!nestedTable || !nestedTable.key) return null;
       const relationships = (getUiConfig().relationships || {}).byPair || {};
       const pair = relationships[`${state.activeTableKey}::${nestedTable.key}`] || [];
-      if (pair[0]) return pair[0];
-      const reversePair = relationships[`${nestedTable.key}::${state.activeTableKey}`] || [];
-      const reverse = reversePair[0];
-      if (!reverse) return null;
-      return Object.assign({}, reverse, {
-        sourceTableKey: state.activeTableKey,
-        sourceTable: reverse.targetTable,
-        sourceField: reverse.targetField,
-        targetTableKey: nestedTable.key,
-        targetTable: reverse.sourceTable,
-        targetField: reverse.sourceField,
-      });
+      return pair[0] || null;
     }
 
     function filterRowsByRelationship(rows, relationship, parentRecord) {

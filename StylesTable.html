@@ -1,5 +1,5 @@
     /*
-      Table toolbar, grouping dropzone, and statistics.
+      Table toolbar, grouping dropzone, statistics, and pagination controls.
     */
     .table-actions {
       display: inline-flex;
@@ -121,5 +121,81 @@
 
     .table-stats strong {
       color: #20262d;
+    }
+
+    .table-pagination {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 7px 14px;
+      border-bottom: 1px solid #edf0f3;
+      background: #ffffff;
+      color: #68727d;
+      font-size: 12px;
+    }
+
+    .table-pagination-meta,
+    .table-pagination-controls {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .table-pagination-meta strong {
+      color: #20262d;
+      font-weight: 800;
+    }
+
+    .table-pagination-meta em {
+      border: 1px solid rgba(200, 154, 91, .24);
+      border-radius: 999px;
+      background: #fffaf3;
+      color: rgba(109, 78, 44, .78);
+      padding: 3px 7px;
+      font-style: normal;
+      font-weight: 800;
+    }
+
+    .page-btn {
+      width: 30px;
+      height: 30px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid #dfe4e9;
+      border-radius: 7px;
+      background: #fbfcfd;
+      color: #5f6872;
+      cursor: pointer;
+    }
+
+    .page-btn svg {
+      width: 15px;
+      height: 15px;
+      stroke-width: 2.2;
+    }
+
+    .page-btn:hover:not(:disabled) {
+      border-color: rgba(200, 154, 91, .38);
+      background: #ffffff;
+      color: var(--walnut-700);
+    }
+
+    .page-btn:disabled {
+      opacity: .38;
+      cursor: default;
+    }
+
+    .page-size-select {
+      height: 30px;
+      border: 1px solid #dfe4e9;
+      border-radius: 7px;
+      background: #ffffff;
+      color: #34404a;
+      padding: 0 7px;
+      font-size: 12px;
+      font-weight: 700;
     }
 

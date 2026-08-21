@@ -515,7 +515,7 @@ function makeUniqueConfigTableId_(key, existingTableIds, ordinal) {
 function getInitialConfigHeaders_(itemKey) {
   const headers = {
     appConfig: ['Config key', 'Category', 'Item', 'Value', 'Color', 'Detail', 'Sort order', 'Status', 'Note'],
-    page: ['Page ID', 'Page type', 'Table name', 'Title column', 'Default table view', 'Data mode', 'Report name', 'Link URL', 'AI insight enable', 'AI insight column'],
+    page: ['Page ID', 'Page type', 'Table name', 'Default table view', 'Report name', 'Link URL', 'Title column', 'Data mode', 'AI insight enable', 'AI insight column'],
     view: ['View ID', 'Page ID', 'Item', 'View type', 'Title column', 'Default group by', 'Column order', 'Hidden columns', 'Section layout', 'Filter fields', 'Default filters'],
     form: ['Form ID', 'Page ID', 'Item', 'Mode', 'Form type', 'Columns', 'Label position', 'Show empty fields', 'Main display name', 'Column order', 'Hidden columns', 'Section layout', 'Nested table', 'Status'],
     component: ['Component ID', 'View ID', 'Item', 'Component type', 'Enabled', 'Config value'],

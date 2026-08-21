@@ -110,15 +110,6 @@ function buildDataConfigTableData_(item, forceRefresh) {
       const data = buildSystemTableRowsData_(tableRef);
       return Object.assign({}, data, { tableRef, sourceIndex });
     } catch (error) {
-      logAppDiagnostic_('warn', 'data_config_source_skipped', {
-        configKey: item.key || '',
-        sourceIndex,
-        spreadsheetId: tableRef.spreadsheetId || '',
-        sheetName: tableRef.sheetName || '',
-        sourceTables: tableRef.dataConfigSource && tableRef.dataConfigSource.tables
-          ? tableRef.dataConfigSource.tables
-          : [],
-      }, error);
       return {
         tableRef,
         sourceIndex,

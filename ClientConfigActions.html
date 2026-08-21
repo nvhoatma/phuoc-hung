@@ -59,8 +59,6 @@
     }
 
     function bindConfigFieldEnhancements(root) {
-      if (typeof enhanceSelectSearch === 'function') enhanceSelectSearch(root);
-
       root.querySelectorAll('[data-config-toggle]').forEach((button) => {
         button.addEventListener('click', () => {
           const hidden = button.parentElement.querySelector('[data-config-toggle-value]');
@@ -516,7 +514,7 @@
     }
 
     function applySavedConfigRecordToClientData(configKey, record, result) {
-      const cacheKey = getConfigRuntimeCacheKey(configKey);
+      const cacheKey = `config:${configKey}`;
       const data = state.configDataCache[cacheKey] || state.configData;
       if (!data || !data.headers) return;
       const rowNumber = Number(result && result.rowNumber) || Number(state.configSelectedRowNumber) || getNextConfigRowNumber(data);
@@ -538,7 +536,7 @@
     }
 
     function removeDeletedConfigRecordFromClientData(configKey, rowNumber) {
-      const cacheKey = getConfigRuntimeCacheKey(configKey);
+      const cacheKey = `config:${configKey}`;
       const data = state.configDataCache[cacheKey] || state.configData;
       if (!data) return;
       const nextRows = (data.rows || []).filter((row) => Number(row.rowNumber) !== Number(rowNumber));

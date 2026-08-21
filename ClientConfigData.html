@@ -147,7 +147,7 @@
 
     async function loadConfigItem(configKey, options = {}) {
       if (!configKey) return;
-      const cacheKey = getConfigRuntimeCacheKey(configKey);
+      const cacheKey = `config:${configKey}`;
       if (!options.force && state.configDataCache[cacheKey]) {
         state.activeConfigKey = configKey;
         state.configData = state.configDataCache[cacheKey];
@@ -193,7 +193,7 @@
     }
 
     function fetchConfigData(configKey, forceRefresh = false) {
-      const cacheKey = getConfigRuntimeCacheKey(configKey);
+      const cacheKey = `config:${configKey}`;
       if (!forceRefresh && state.configDataCache[cacheKey]) return Promise.resolve(state.configDataCache[cacheKey]);
       if (!forceRefresh && state.inFlight[cacheKey]) return state.inFlight[cacheKey];
 
@@ -222,9 +222,7 @@
     async function prefetchConfigItems() {
       try {
         const nearbyKeys = getNearbyConfigItemKeys()
-          .filter((key) => key
-            && key !== state.activeConfigKey
-            && !state.configDataCache[getConfigRuntimeCacheKey(key)]);
+          .filter((key) => key && key !== state.activeConfigKey && !state.configDataCache[`config:${key}`]);
         await prefetchConfigQueue(nearbyKeys.slice(0, 2), 1);
         state.configPrefetched = true;
       } finally {

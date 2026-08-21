@@ -119,7 +119,7 @@
     }
 
     function applyImportedRecordsToClientData(tableKey, records) {
-      const cacheKey = getTableRuntimeCacheKey(tableKey);
+      const cacheKey = `table:${tableKey}`;
       const data = state.dataCache[cacheKey] || (state.activeTableKey === tableKey ? state.tableData : null);
       if (!data || !data.headers) return;
       let nextRowNumber = getNextClientRowNumber(data);

@@ -6,12 +6,6 @@
     async function saveCurrentRecord(event) {
       event.preventDefault();
       if (!state.editing) return;
-      const formReadiness = getDrawerFormReadinessState();
-      if (formReadiness.loading) {
-        syncDrawerFormControls();
-        showToast('Please wait until the form and all select options finish loading before saving.');
-        return;
-      }
       const editingData = getEditingTableData();
       const editingTableKey = getEditingTableKey();
       if (editingData && editingData.table && editingData.table.readOnly) {
@@ -82,14 +76,10 @@
               record: pending.record,
             });
             applySavedRecordToClientData(pending, result);
-            if (result && result.row) {
-              acknowledgeTableManifestVersion(pending.tableKey, result.tableVersion);
-            }
             clearOverviewClientCache();
             if (state.activeTableKey === pending.tableKey) renderPage();
             if (pending.nested) refreshOpenDrawerNestedTables();
-            const savedId = result && result.recordId ? ` (ID: ${result.recordId})` : '';
-            showToast(getSaveQueueStatusText(`Saved to Google Sheet${savedId}`));
+            showToast(getSaveQueueStatusText('Saved to Google Sheet'));
           } catch (error) {
             rollbackQueuedRecord(pending);
             if (state.activeTableKey === pending.tableKey) {
@@ -115,8 +105,7 @@
 
     function getClientRowSnapshot(tableKey, rowNumber) {
       if (!rowNumber) return null;
-      const data = state.dataCache[getTableRuntimeCacheKey(tableKey)]
-        || (state.activeTableKey === tableKey ? state.tableData : null);
+      const data = state.dataCache[`table:${tableKey}`] || (state.activeTableKey === tableKey ? state.tableData : null);
       const row = data && data.rows ? data.rows.find((item) => Number(item.rowNumber) === Number(rowNumber)) : null;
       return row ? {
         rowNumber: row.rowNumber,
@@ -127,7 +116,7 @@
     }
 
     function applyQueuedRecordToClientData(pending) {
-      const cacheKey = getTableRuntimeCacheKey(pending.tableKey);
+      const cacheKey = `table:${pending.tableKey}`;
       const data = state.dataCache[cacheKey] || (state.activeTableKey === pending.tableKey ? state.tableData : null);
       if (!data || !data.headers) return;
       if (!pending.rowNumber) pending.clientRowNumber = getNextClientTempRowNumber();
@@ -139,33 +128,18 @@
 
     function applySavedRecordToClientData(pending, result) {
       const rowNumber = Number(result && result.rowNumber) || Number(pending.rowNumber) || getNextClientRowNumber(
-        state.dataCache[getTableRuntimeCacheKey(pending.tableKey)] || state.tableData || { rows: [] }
+        state.dataCache[`table:${pending.tableKey}`] || state.tableData || { rows: [] }
       );
-      const savedRow = result && result.row && result.row.record ? result.row : null;
-      if (savedRow) pending.record = { ...savedRow.record };
-      applyRecordRowToClientData(pending, {
-        rowNumber,
-        pendingSave: false,
-        row: savedRow,
-        persist: !!savedRow,
-      });
+      applyRecordRowToClientData(pending, { rowNumber, pendingSave: false });
     }
 
     function applyRecordRowToClientData(pending, options) {
-      const cacheKey = getTableRuntimeCacheKey(pending.tableKey);
+      const cacheKey = `table:${pending.tableKey}`;
       const data = state.dataCache[cacheKey] || (state.activeTableKey === pending.tableKey ? state.tableData : null);
       if (!data || !data.headers) return;
       const rowNumber = Number(options && options.rowNumber) || Number(pending.rowNumber) || pending.clientRowNumber || getNextClientRowNumber(data);
-      const authoritativeRow = options && options.row;
-      const values = authoritativeRow && Array.isArray(authoritativeRow.values)
-        ? authoritativeRow.values.slice()
-        : data.headers.map((header) => pending.record[header] == null ? '' : pending.record[header]);
-      const nextRow = authoritativeRow ? {
-        ...authoritativeRow,
-        rowNumber,
-        values,
-        record: { ...(authoritativeRow.record || pending.record) },
-      } : {
+      const values = data.headers.map((header) => pending.record[header] == null ? '' : pending.record[header]);
+      const nextRow = {
         rowNumber,
         id: values[0] || `row-${rowNumber}`,
         values,
@@ -187,22 +161,12 @@
         bumpTableRenderVersion();
       }
       removeClientCache('tableInitial', pending.tableKey);
-      if (options && options.persist && isFullyLoadedClientTableData(pending.tableKey, nextData)) {
-        writePersistentFullTableData(pending.tableKey, nextData);
-      } else {
-        removeClientCache('tableFull', pending.tableKey);
-      }
+      removeClientCache('tableFull', pending.tableKey);
       if (!pending.rowNumber || Number(state.detailRowNumber) === Number(pending.clientRowNumber)) state.detailRowNumber = rowNumber;
     }
 
-    function isFullyLoadedClientTableData(tableKey, data) {
-      const hydration = state.tableHydration[tableKey] || {};
-      const serverPage = data && data.serverPage ? data.serverPage : {};
-      return hydration.status === 'ready' || serverPage.fullyLoaded === true || serverPage.nextCursor === '';
-    }
-
     function rollbackQueuedRecord(pending) {
-      const cacheKey = getTableRuntimeCacheKey(pending.tableKey);
+      const cacheKey = `table:${pending.tableKey}`;
       const data = state.dataCache[cacheKey] || (state.activeTableKey === pending.tableKey ? state.tableData : null);
       if (!data || !data.rows) return;
       let nextRows;
@@ -296,8 +260,7 @@
 
     async function requestDeleteRecord(rowNumber, tableKey) {
       const targetTableKey = tableKey || state.activeTableKey;
-      const data = state.dataCache[getTableRuntimeCacheKey(targetTableKey)]
-        || (targetTableKey === state.activeTableKey ? state.tableData : null);
+      const data = state.dataCache[`table:${targetTableKey}`] || (targetTableKey === state.activeTableKey ? state.tableData : null);
       const recordRowNumber = Number(rowNumber || 0);
       const row = data && data.rows ? data.rows.find((item) => Number(item.rowNumber) === recordRowNumber) : null;
       if (!recordRowNumber) return;
@@ -345,7 +308,7 @@
     }
 
     function removeDeletedRecordFromClientData(tableKey, rowNumber) {
-      const cacheKey = getTableRuntimeCacheKey(tableKey);
+      const cacheKey = `table:${tableKey}`;
       const data = state.dataCache[cacheKey] || (state.activeTableKey === tableKey ? state.tableData : null);
       if (!data) return;
       const nextRows = (data.rows || []).filter((row) => Number(row.rowNumber) !== Number(rowNumber));
@@ -378,7 +341,6 @@
         return;
       }
       state.drawerStack = [];
-      if (el.drawerSubtitle) delete el.drawerSubtitle.dataset.readyText;
       el.drawer.classList.remove('open');
       el.drawer.classList.remove('advanced');
       el.drawer.classList.remove('loading');
@@ -517,28 +479,37 @@
 
     function hydrateTableSchemaFromCacheForForms(tableKey, data) {
       if (!tableKey || !data || !needsFullFieldSchema(data)) return data;
-      const cacheKey = getSchemaRuntimeCacheKey(tableKey);
+      const cacheKey = `schema:table:${tableKey}`;
       const cached = state.metaCache[cacheKey] || readClientCache('meta', cacheKey, CLIENT_CACHE_TTL.meta);
       if (!cached || cached.formulaAware !== true) return data;
       state.metaCache[cacheKey] = cached;
       return mergeTableFieldSchema(tableKey, data, cached);
     }
 
-    async function prepareDrawerFormData(tableKey, data) {
-      if (!tableKey || !data) throw new Error('Form data is unavailable.');
-      await new Promise((resolve) => {
-        window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
-      });
-      await hydrateDeferredUiConfig();
-      if (!state.uiConfigHydrated) {
-        throw new Error('Form configuration could not be loaded. Please try again.');
-      }
-      let prepared = hydrateTableSchemaFromCacheForForms(tableKey, data);
-      prepared = await ensureTableFieldSchemaForForms(tableKey, prepared);
-      if (!prepared || needsFullFieldSchema(prepared)) {
-        throw new Error('Form schema and select options could not be loaded. Please try again.');
-      }
-      return prepared;
+    function scheduleDrawerSchemaUpgrade(tableKey, data, mode, options = {}) {
+      if (!tableKey || !data || !needsFullFieldSchema(data)) return;
+      const nested = !!options.nested;
+      ensureTableFieldSchemaForForms(tableKey, data)
+        .then((freshData) => {
+          if (!freshData || !state.editing || state.editing.tableKey !== tableKey) return;
+          if (!!state.editing.isNested !== nested) return;
+          if (!el.drawer || !el.drawer.classList.contains('open') || !el.recordForm) return;
+          const activeMode = state.editing.mode || mode || 'quick';
+          const scrollTop = el.recordForm.scrollTop || 0;
+          const liveRecord = collectCurrentDrawerFormRecord();
+          state.editing.record = liveRecord;
+          state.editingTableData = freshData;
+          el.recordForm.innerHTML = renderForm(freshData.fields || freshData.headers, liveRecord, activeMode);
+          bindNestedTableButtons(el.recordForm);
+          if (!nested) loadNestedTablesForDrawerForm(activeMode);
+          if (typeof bindFormFlowSteps === 'function') bindFormFlowSteps(el.recordForm);
+          if (typeof enhanceImagePreviewSafe === 'function') enhanceImagePreviewSafe('form');
+          scheduleApplyLanguage();
+          window.requestAnimationFrame(() => {
+            if (el.recordForm) el.recordForm.scrollTop = scrollTop;
+          });
+        })
+        .catch((error) => console.warn('Drawer schema upgrade skipped:', error));
     }
 
     function getEditingTableKey() {
@@ -550,17 +521,15 @@
       if (state.editingTableData && (!tableKey || (state.editingTableData.table && state.editingTableData.table.key === tableKey))) {
         return state.editingTableData;
       }
-      const cacheKey = tableKey ? getTableRuntimeCacheKey(tableKey) : '';
-      return cacheKey && state.dataCache[cacheKey]
-        ? state.dataCache[cacheKey]
+      return tableKey && state.dataCache[`table:${tableKey}`]
+        ? state.dataCache[`table:${tableKey}`]
         : state.tableData;
     }
 
     function reopenDrawerWithRecord(pending) {
       if (!pending) return;
-      const cacheKey = pending.tableKey ? getTableRuntimeCacheKey(pending.tableKey) : '';
-      const data = cacheKey && state.dataCache[cacheKey]
-        ? state.dataCache[cacheKey]
+      const data = pending.tableKey && state.dataCache[`table:${pending.tableKey}`]
+        ? state.dataCache[`table:${pending.tableKey}`]
         : state.tableData;
       if (!data) return;
       if (pending.nested && el.drawer && el.drawer.classList.contains('open') && state.editing && !state.editing.isNested) {
@@ -589,33 +558,11 @@
       const isOpen = !!(el.drawer && el.drawer.classList.contains('open') && state.editing);
       const isNested = !!(state.editing && state.editing.isNested);
       const isLoading = !!state.drawerLoading;
-      const formReadiness = getDrawerFormReadinessState();
-      const formLoading = isOpen && formReadiness.loading;
       const mode = normalizeDrawerFormMode(state.editing && state.editing.mode);
       const isAdvanced = mode === 'full';
       const aiInsightEnabled = !!getActiveAiInsightConfig(
-        state.editingTableData && Array.isArray(state.editingTableData.headers) ? state.editingTableData.headers : []
+        (getEditingTableData() && getEditingTableData().headers) || []
       ).enabled;
-      if (el.recordForm && typeof enhanceSelectSearch === 'function') enhanceSelectSearch(el.recordForm);
-      if (el.recordForm) el.recordForm.setAttribute('aria-busy', formLoading ? 'true' : 'false');
-      if (el.saveBtn) {
-        el.saveBtn.disabled = isLoading || formLoading;
-        el.saveBtn.textContent = formLoading ? 'Loading options...' : 'Save';
-        el.saveBtn.title = formLoading
-          ? formReadiness.message
-          : 'Save record';
-      }
-      if (el.drawerSubtitle && isOpen) {
-        if (formLoading) {
-          if (!el.drawerSubtitle.dataset.readyText) {
-            el.drawerSubtitle.dataset.readyText = el.drawerSubtitle.textContent || '';
-          }
-          el.drawerSubtitle.textContent = `${formReadiness.message} · Save will unlock when ready`;
-        } else if (el.drawerSubtitle.dataset.readyText) {
-          el.drawerSubtitle.textContent = el.drawerSubtitle.dataset.readyText;
-          delete el.drawerSubtitle.dataset.readyText;
-        }
-      }
       if (el.aiInsightBtn) {
         el.aiInsightBtn.style.display = isOpen && !isLoading && aiInsightEnabled ? '' : 'none';
         el.aiInsightBtn.disabled = !isOpen || isLoading || !aiInsightEnabled;
@@ -638,20 +585,6 @@
         el.formModeToggleBtn.setAttribute('aria-label', el.formModeToggleBtn.title);
       }
     }
-
-    function getDrawerFormReadinessState() {
-      if (!el.recordForm) return { loading: false, count: 0, message: '' };
-      const count = el.recordForm.querySelectorAll('select[data-select-options-loading="1"]').length;
-      const editingData = typeof getEditingTableData === 'function' ? getEditingTableData() : null;
-      const schemaLoading = !!(state.editing && editingData && needsFullFieldSchema(editingData));
-      const configLoading = !!(state.editing && !state.uiConfigHydrated);
-      const loading = count > 0 || schemaLoading || configLoading;
-      const message = count > 0
-        ? `Loading ${count} select field${count === 1 ? '' : 's'}`
-        : 'Loading form configuration and select options';
-      return { loading, count, schemaLoading, configLoading, message };
-    }
-
     function buildViewAiInsightPayload() {
       const row = getCurrentAiInsightViewRow();
       const data = state.tableData || {};
@@ -1276,7 +1209,7 @@
     }
 
     function applyImportedRecordsToClientData(tableKey, records) {
-      const cacheKey = getTableRuntimeCacheKey(tableKey);
+      const cacheKey = `table:${tableKey}`;
       const data = state.dataCache[cacheKey] || (state.activeTableKey === tableKey ? state.tableData : null);
       if (!data || !data.headers) return;
       let nextRowNumber = getNextClientRowNumber(data);
@@ -1408,7 +1341,8 @@
         message: rowNumber ? 'Loading form' : 'Loading new form',
       });
       try {
-        data = await prepareDrawerFormData(state.activeTableKey, data);
+        await ensureUiConfigHydratedForForms();
+        data = hydrateTableSchemaFromCacheForForms(state.activeTableKey, data);
         const row = rowNumber ? data.rows.find((item) => item.rowNumber === rowNumber) : null;
         const readOnly = data.table && data.table.readOnly;
         state.editing = row
@@ -1435,6 +1369,7 @@
         syncDrawerFormControls();
         if (typeof enhanceImagePreviewSafe === 'function') enhanceImagePreviewSafe('form');
         scheduleApplyLanguage();
+        scheduleDrawerSchemaUpgrade(state.activeTableKey, data, formMode);
       } catch (error) {
         showError(error);
         closeDrawer();
@@ -1458,7 +1393,8 @@
         message: 'Loading duplicate form',
       });
       try {
-        const data = await prepareDrawerFormData(state.activeTableKey, state.tableData);
+        await ensureUiConfigHydratedForForms();
+        const data = hydrateTableSchemaFromCacheForForms(state.activeTableKey, state.tableData);
         const row = data && data.rows ? data.rows.find((item) => Number(item.rowNumber) === Number(rowNumber)) : null;
         if (!row) {
           showToast('Record not found');
@@ -1492,6 +1428,7 @@
         syncDrawerFormControls();
         if (typeof enhanceImagePreviewSafe === 'function') enhanceImagePreviewSafe('form');
         scheduleApplyLanguage();
+        scheduleDrawerSchemaUpgrade(state.activeTableKey, data, formMode);
       } catch (error) {
         showError(error);
         closeDrawer();
@@ -1504,20 +1441,21 @@
       if (!tableKey) return;
       if (el.drawer && el.drawer.classList.contains('open') && state.editing) pushDrawerFrame();
       state.editing = { tableKey, rowNumber: rowNumber || null, record: { ...seedRecord }, mode: 'nested', isNested: true };
-      state.editingTableData = state.dataCache[getTableRuntimeCacheKey(tableKey)] || null;
+      state.editingTableData = state.dataCache[`table:${tableKey}`] || null;
       showDrawerLoading(rowNumber ? 'Loading related row' : 'New related row', 'Preparing nested form', {
         message: 'Loading nested form',
       });
       try {
+        await ensureUiConfigHydratedForForms();
         let data = tableKey === state.activeTableKey && state.tableData
           ? state.tableData
-          : state.dataCache[getTableRuntimeCacheKey(tableKey)];
+          : state.dataCache[`table:${tableKey}`];
         if (!data) data = await fetchItemData({ tableKey });
         if (!data) {
           closeDrawer();
           return;
         }
-        data = await prepareDrawerFormData(tableKey, data);
+        data = hydrateTableSchemaFromCacheForForms(tableKey, data);
         const readOnly = data.table && data.table.readOnly;
         if (!rowNumber && (readOnly || !canCreateRows(tableKey))) {
           showToast(readOnly ? 'This inherited table is read-only' : 'Create is disabled by app config');
@@ -1547,6 +1485,7 @@
         syncDrawerFormControls();
         if (typeof enhanceImagePreviewSafe === 'function') enhanceImagePreviewSafe('form');
         scheduleApplyLanguage();
+        scheduleDrawerSchemaUpgrade(tableKey, data, 'nested', { nested: true });
       } catch (error) {
         showError(error);
         closeDrawer();
@@ -1584,8 +1523,8 @@
     el.closeDrawerBtn.addEventListener('click', closeDrawer);
     el.recordForm.addEventListener('submit', saveCurrentRecord);
     el.deleteBtn.addEventListener('click', deleteCurrentRecord);
-    el.aiInsightBtn.addEventListener('click', openAiInsightForDrawerForm);
     el.formModeToggleBtn.addEventListener('click', switchDrawerFormMode);
+    el.aiInsightBtn.addEventListener('click', openAiInsightForDrawerForm);
     el.printFormBtn.addEventListener('click', printCurrentDrawerForm);
     el.importBtn.addEventListener('click', toggleImportPanel);
     el.importTemplateBtn.addEventListener('click', downloadImportTemplate);

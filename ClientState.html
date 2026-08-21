@@ -11,8 +11,8 @@
       download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 4v10"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>',
       upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 20V10"/><path d="m7 14 5-5 5 5"/><path d="M5 4h14"/></svg>',
       print: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 8V4h10v4"/><path d="M7 18h10v2H7z"/><rect x="4" y="8" width="16" height="8" rx="2"/><path d="M8 12h0"/></svg>',
-      sparkles: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 3 1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8L12 3Z"/><path d="m19 14 .9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14Z"/><path d="m6 15 .7 1.6L8.3 17l-1.6.7L6 19.3l-.7-1.6L3.7 17l1.6-.7L6 15Z"/></svg>',
       copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"/></svg>',
+      sparkles: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 3 1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8L12 3Z"/><path d="m19 14 .9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14Z"/><path d="m6 15 .7 1.6L8.3 17l-1.6.7L6 19.3l-.7-1.6L3.7 17l1.6-.7L6 15Z"/></svg>',
       edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4 11.5-11.5Z"/></svg>',
       trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 14h10l1-14"/><path d="M9 7V4h6v3"/></svg>',
       sheet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="3.5" width="14" height="17" rx="2"/><path d="M8 8h8M8 12h8M8 16h8M11 8v8"/></svg>',
@@ -38,54 +38,18 @@
       chevronRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m9 18 6-6-6-6"/></svg>',
       chevronDown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m6 9 6 6 6-6"/></svg>',
     };
-    // v96 performs a one-time rollover for stable-snapshot table caches.
-    // Later F5 loads keep using tableFull until the manifest reports a change.
-    const CLIENT_CACHE_VERSION = 'v96';
-    const CLIENT_TABLE_CACHE_FORMAT_VERSION = 2;
-    const CLIENT_STATIC_BUNDLE_VERSION = 'config-ui-v6';
-    const CLIENT_INITIAL_TABLE_BATCH_SIZE = 102;
-    const CLIENT_BACKGROUND_TABLE_BATCH_SIZE = 1000;
-    const CLIENT_MANIFEST_SYNC_ENABLED = true;
-    const CLIENT_MANIFEST_SYNC_DELAY_MS = {
-      cachedBootstrap: 600,
-      coldBootstrap: 5000,
-    };
+    const CLIENT_CACHE_VERSION = 'v89';
+    const CLIENT_STATIC_BUNDLE_VERSION = 'config-ui-v3';
     const CLIENT_CACHE_TTL = {
       uiConfig: 3 * 24 * 60 * 60 * 1000,
       meta: 3 * 24 * 60 * 60 * 1000,
       staticBundle: 3 * 24 * 60 * 60 * 1000,
-      manifest: 30 * 24 * 60 * 60 * 1000,
-      tableInitial: 60 * 1000,
+      tableInitial: 60 * 60 * 1000,
       tableFull: 3 * 24 * 60 * 60 * 1000,
       preference: 3 * 24 * 60 * 60 * 1000,
     };
-    const CLIENT_RUNTIME_CACHE_BUCKET = Object.freeze({
-      config: 'config',
-      schema: 'schema:table',
-      table: 'table',
-      tableInitial: 'tableInitial',
-    });
-
-    function getRuntimeCacheKey(bucket, key) {
-      return `${bucket}:${key || ''}`;
-    }
-
-    function getConfigRuntimeCacheKey(configKey) {
-      return getRuntimeCacheKey(CLIENT_RUNTIME_CACHE_BUCKET.config, configKey);
-    }
-
-    function getSchemaRuntimeCacheKey(tableKey) {
-      return getRuntimeCacheKey(CLIENT_RUNTIME_CACHE_BUCKET.schema, tableKey);
-    }
-
-    function getTableRuntimeCacheKey(tableKey) {
-      return getRuntimeCacheKey(CLIENT_RUNTIME_CACHE_BUCKET.table, tableKey);
-    }
-
-    function getInitialTableRuntimeCacheKey(tableKey) {
-      return getRuntimeCacheKey(CLIENT_RUNTIME_CACHE_BUCKET.tableInitial, tableKey);
-    }
-
+    const CLIENT_TABLE_INITIAL_ROW_LIMIT = 100;
+    const CLIENT_TABLE_FULL_ROW_LIMIT = 2000;
     function getClientCacheNamespacePrefix() {
       const path = window.location ? window.location.pathname || 'process-app' : 'process-app';
       return `processApp:${path}:`;
@@ -143,9 +107,6 @@
     function readLegacyClientCache(bucket, key, ttl) {
       const storage = getClientStorage();
       if (!storage) return { found: false };
-      // Table payloads created before stable snapshots can be incomplete and
-      // must never be migrated into the current cache namespace.
-      if (bucket === 'tableFull' || bucket === 'tableInitial') return { found: false };
       const path = window.location ? window.location.pathname || 'process-app' : 'process-app';
       const rootPrefix = `processApp:${path}:`;
       const currentPrefix = getClientCachePrefix();
@@ -165,7 +126,6 @@
     }
 
     function writeClientCache(bucket, key, value, ttl) {
-      if (window.__processAppHardRefreshing) return false;
       const storage = getClientStorage();
       if (!storage || value == null) return false;
       const cacheKey = getClientCacheKey(bucket, key);
@@ -203,39 +163,6 @@
           if (key && key.indexOf(prefix) === 0) storage.removeItem(key);
         }
       } catch (error) {}
-    }
-
-    function cleanupClientStorageCache() {
-      const storage = getClientStorage();
-      if (!storage) return 0;
-      const namespacePrefix = getClientCacheNamespacePrefix();
-      const currentPrefix = getClientCachePrefix();
-      let removed = 0;
-      try {
-        for (let index = storage.length - 1; index >= 0; index -= 1) {
-          const key = storage.key(index);
-          if (!key || key.indexOf(namespacePrefix) !== 0) continue;
-          const isPreference = key.indexOf(':preference:') >= 0;
-          if (key.indexOf(currentPrefix) !== 0 && !isPreference) {
-            storage.removeItem(key);
-            removed += 1;
-            continue;
-          }
-          let payload;
-          try {
-            payload = JSON.parse(storage.getItem(key) || '');
-          } catch (error) {
-            payload = null;
-          }
-          const savedAt = Number(payload && payload.savedAt || 0);
-          const ttl = Number(payload && payload.ttl || 0);
-          if (!payload || !savedAt || (ttl > 0 && Date.now() - savedAt > ttl)) {
-            storage.removeItem(key);
-            removed += 1;
-          }
-        }
-      } catch (error) {}
-      return removed;
     }
 
     function invalidatePersistentConfigCaches() {
@@ -281,7 +208,7 @@
         : window.location.href);
       try {
         const url = new URL(shellUrl);
-        url.searchParams.delete('hardRefresh');
+        url.searchParams.set('hardRefresh', String(Date.now()));
         return url.toString();
       } catch (error) {
         return shellUrl;
@@ -332,46 +259,32 @@
       return bootstrap;
     }
 
-
     async function hardRefreshAppSettings() {
-      if (window.__processAppHardRefreshing) return;
-      window.__processAppHardRefreshing = true;
-      state.tableBackgroundLoadToken = '';
-      state.tablePageRequestToken = `hard-refresh:${Date.now()}`;
-      if (state.manifestSyncTimer) {
-        window.clearTimeout(state.manifestSyncTimer);
-        state.manifestSyncTimer = null;
-      }
       state.appMode = 'user';
       syncAppModeShell();
       if (el.pageTitle) el.pageTitle.textContent = getProcessName();
-      if (el.breadcrumb) el.breadcrumb.textContent = 'Refreshing app';
+      if (el.breadcrumb) el.breadcrumb.textContent = 'Refreshing settings';
       if (el.content) {
         el.content.innerHTML = typeof renderHardRefreshPanel === 'function'
           ? renderHardRefreshPanel()
-          : '<section class="panel route-loading-panel"><div class="route-loading-head"><div><strong>Refreshing app</strong><span>Loading the latest data and configuration</span></div><i aria-hidden="true"></i></div></section>';
+          : '<section class="panel route-loading-panel"><div class="route-loading-head"><div><strong>Refreshing settings</strong><span>Loading the latest app configuration</span></div><i aria-hidden="true"></i></div></section>';
       }
       clearClientStorageNamespace({ allProcessApp: true, preservePreferences: false });
       resetConfigBundleRuntime();
-      showToast('Refreshing data and settings');
-      setLoading(true, 'Refreshing app');
+      showToast('Refreshing settings');
+      setLoading(true, 'Refreshing settings');
       try {
-        const result = await gasCall('hardRefreshAppSettings');
-        if (!result || result.ok !== true || result.clearedServerCache !== true) {
-          throw new Error(result && result.message ? result.message : 'Server cache could not be cleared.');
+        const payload = await gasCall('hardRefreshAppSettings');
+        if (payload && payload.bootstrap) {
+          writeClientCache('bootstrap', 'app', payload.bootstrap, CLIENT_CACHE_TTL.uiConfig);
         }
-        // Requests started before hard refresh may finish while the server cache
-        // is being cleared. Remove their writes once more before reloading so
-        // the next page starts without any client-side data or config cache.
-        clearClientStorageNamespace({ allProcessApp: true, preservePreferences: false });
-        reloadAppShellAfterHardRefresh();
+        if (payload && payload.runtimeConfig) {
+          writeClientCache('uiConfig', 'runtime', payload.runtimeConfig, CLIENT_CACHE_TTL.uiConfig);
+        }
       } catch (error) {
-        window.__processAppHardRefreshing = false;
-        console.error('Hard refresh failed:', error);
-        setLoading(false);
-        showError(error);
-        showToast('Hard refresh failed. Data was not reloaded.');
+        console.warn('Hard refresh prefetch skipped:', error);
       }
+      reloadAppShellAfterHardRefresh();
     }
 
     function getStoredPreference(key, fallback) {
@@ -416,9 +329,6 @@
       tableDataVersion: 0,
       filteredRowsCache: null,
       filterOptionsCache: {},
-      manifestSyncPromise: null,
-      manifestSyncTimer: null,
-      acknowledgedTableVersions: {},
       routeLoading: false,
       shouldResetRouteScroll: false,
       routeScrollResetUntil: 0,
@@ -440,12 +350,7 @@
       filterDismissBound: false,
       tableViewMode: 'table',
       tablePage: 1,
-      tablePageSize: CLIENT_INITIAL_TABLE_BATCH_SIZE,
-      tableDataLoading: false,
-      tablePageRequestToken: '',
-      tableBackgroundLoadToken: '',
-      tableBackgroundRetries: {},
-      tableHydrationTicker: null,
+      tablePageSize: Number(getStoredPreference('tablePageSize', 2000)) || 2000,
       detailRowNumber: null,
       masterListScrollTop: 0,
       shouldRestoreMasterListScroll: false,
@@ -496,8 +401,8 @@
       drawerBackdrop: document.getElementById('drawerBackdrop'),
       drawerTitle: document.getElementById('drawerTitle'),
       drawerSubtitle: document.getElementById('drawerSubtitle'),
-      aiInsightBtn: document.getElementById('aiInsightBtn'),
       formModeToggleBtn: document.getElementById('formModeToggleBtn'),
+      aiInsightBtn: document.getElementById('aiInsightBtn'),
       printFormBtn: document.getElementById('printFormBtn'),
       importBtn: document.getElementById('importBtn'),
       importPanel: document.getElementById('importPanel'),
@@ -513,8 +418,8 @@
     };
 
     el.mobileMenu.innerHTML = ICONS.menu;
-    el.aiInsightBtn.innerHTML = `${ICONS.sparkles}<span>AI</span>`;
     el.formModeToggleBtn.innerHTML = `${ICONS.advancedEdit}<span>Advanced</span>`;
+    el.aiInsightBtn.innerHTML = `${ICONS.sparkles}<span>AI</span>`;
     el.printFormBtn.innerHTML = `${ICONS.print}<span>PNG</span>`;
     el.importBtn.innerHTML = `${ICONS.upload}<span>Import</span>`;
     el.importTemplateBtn.innerHTML = `${ICONS.download}<span>Template</span>`;
@@ -544,7 +449,9 @@
       }
       return Promise.reject(new Error('Google Apps Script runtime is required. Mock data is disabled.'));
     }
-
+    function isHardRefreshLoad() {
+      return !!window.APP_HARD_REFRESH_LOAD;
+    }
     function applyDefaultNavCollapse(navigation) {
       state.collapsedNav = {};
       (navigation || []).forEach((root) => {
@@ -585,15 +492,22 @@
       initScrollRestoration();
       setLoading(true, 'Loading app');
       try {
-        cleanupClientStorageCache();
         installUserIdleTracking();
-        const cachedBootstrap = readClientCache('bootstrap', 'app', CLIENT_CACHE_TTL.uiConfig);
-        if (cachedBootstrap) {
+        const hardRefreshLoad = isHardRefreshLoad();
+        if (hardRefreshLoad) {
+          clearClientStorageNamespace({ allProcessApp: true, preservePreferences: false });
+          resetConfigBundleRuntime();
+        }
+        const cachedBootstrap = hardRefreshLoad ? null : readClientCache('bootstrap', 'app', CLIENT_CACHE_TTL.uiConfig);
+        if (!hardRefreshLoad && cachedBootstrap) {
           await bootWithBootstrap(cachedBootstrap, { fromCache: true });
+          refreshBootstrapInBackground();
           return;
         }
-        const bootstrap = await gasCall('getAppBootstrap');
-        writeClientCache('bootstrap', 'app', bootstrap, CLIENT_CACHE_TTL.uiConfig);
+        const bootstrap = hardRefreshLoad
+          ? await fetchFreshAppBootstrapWithRuntimeConfig(true)
+          : await gasCall('getAppBootstrap');
+        if (!hardRefreshLoad) writeClientCache('bootstrap', 'app', bootstrap, CLIENT_CACHE_TTL.uiConfig);
         await bootWithBootstrap(bootstrap, { fromCache: false });
       } catch (error) {
         showError(error);
@@ -611,131 +525,33 @@
       applyUserAppConfig();
       syncDocumentTitle();
       applyDefaultNavCollapse(state.bootstrap.navigation);
-      const lastActiveStepId = getStoredPreference('lastActiveStepId', '');
-      const lastActiveMatch = lastActiveStepId
-        ? findStepById(state.bootstrap.navigation, lastActiveStepId)
-        : null;
-      state.activeStep = lastActiveMatch && lastActiveMatch.step
-        ? lastActiveMatch.step
-        : findDefaultLandingStep(state.bootstrap.navigation);
+      state.activeStep = findDefaultLandingStep(state.bootstrap.navigation);
       expandNavToStep(state.bootstrap.navigation, state.activeStep);
       renderSidebar();
       setLoading(false);
-      if (!applyPersistentInitialItemData(state.activeStep) && !applyBootstrapInitialItemData(state.activeStep)) {
-        console.info('Table cache miss:', state.activeStep && state.activeStep.tableKey || 'non-table');
+      if (!applyBootstrapInitialItemData(state.activeStep) && !applyPersistentInitialItemData(state.activeStep)) {
         prepareRouteLoading(state.activeStep);
         renderPage();
         await loadItem(state.activeStep, { prepared: true });
       }
       scheduleDeferredUiConfigHydration();
       schedulePrefetchNavigationData(options.fromCache ? 12000 : 9000);
-      scheduleAppCacheManifestSync(!!options.fromCache);
     }
 
-    function scheduleAppCacheManifestSync(fromCachedBootstrap) {
-      if (!CLIENT_MANIFEST_SYNC_ENABLED || state.manifestSyncPromise || state.manifestSyncTimer) return;
-      const delay = fromCachedBootstrap
-        ? CLIENT_MANIFEST_SYNC_DELAY_MS.cachedBootstrap
-        : CLIENT_MANIFEST_SYNC_DELAY_MS.coldBootstrap;
-      state.manifestSyncTimer = window.setTimeout(() => {
-        state.manifestSyncTimer = null;
-        syncAppCacheManifest();
-      }, delay);
-    }
-
-    function syncAppCacheManifest() {
-      if (state.manifestSyncPromise) return state.manifestSyncPromise;
-      const previous = readClientCache('manifest', 'app', CLIENT_CACHE_TTL.manifest);
-      state.manifestSyncPromise = gasCall('getAppCacheManifest')
-        .then((manifest) => {
-          if (!manifest || !manifest.tables) return null;
-          Object.keys(state.acknowledgedTableVersions || {}).forEach((tableKey) => {
-            const acknowledged = Number(state.acknowledgedTableVersions[tableKey] || 0);
-            const reported = Number(manifest.tables[tableKey] || 0);
-            if (acknowledged > reported) manifest.tables[tableKey] = String(acknowledged);
-          });
-          if (!previous) {
-            // v95 starts with a clean table cache, so the first manifest is only
-            // a baseline. Do not fetch bootstrap/table data again on this F5.
-            writeClientCache('manifest', 'app', manifest, CLIENT_CACHE_TTL.manifest);
-            return manifest;
-          }
-
-          const configChanged = String(previous.configVersion || '0') !== String(manifest.configVersion || '0') ||
-            String(previous.bootstrapVersion || '0') !== String(manifest.bootstrapVersion || '0');
-          const previousTables = previous.tables || {};
-          const changedTables = Object.keys(manifest.tables).filter((tableKey) => (
-            String(previousTables[tableKey] || '0') !== String(manifest.tables[tableKey] || '0')
-          ));
-
-          if (changedTables.length) console.info('Table cache invalidated by manifest:', changedTables);
-          changedTables.forEach(invalidateChangedTableClientCache);
-          if (configChanged) refreshChangedConfigCaches();
-          const activeChanged = state.activeTableKey && changedTables.includes(state.activeTableKey);
-          if (activeChanged) refreshChangedActiveTable(state.activeTableKey);
-          writeClientCache('manifest', 'app', manifest, CLIENT_CACHE_TTL.manifest);
-          return manifest;
-        })
-        .catch((error) => {
-          console.warn('App cache manifest sync skipped:', error);
-          return null;
-        })
-        .finally(() => {
-          state.manifestSyncPromise = null;
-        });
-      return state.manifestSyncPromise;
-    }
-
-    function acknowledgeTableManifestVersion(tableKey, tableVersion) {
-      if (!tableKey || !tableVersion) return false;
-      state.acknowledgedTableVersions[tableKey] = String(tableVersion);
-      const manifest = readClientCache('manifest', 'app', CLIENT_CACHE_TTL.manifest);
-      if (!manifest || !manifest.tables) return false;
-      manifest.tables[tableKey] = String(tableVersion);
-      return writeClientCache('manifest', 'app', manifest, CLIENT_CACHE_TTL.manifest);
-    }
-
-    function invalidateChangedTableClientCache(tableKey) {
-      if (!tableKey) return;
-      delete state.formReadinessPromises[tableKey];
-      const fullCacheKey = getTableRuntimeCacheKey(tableKey);
-      const initialCacheKey = getInitialTableRuntimeCacheKey(tableKey);
-      const schemaCacheKey = getSchemaRuntimeCacheKey(tableKey);
-      delete state.dataCache[fullCacheKey];
-      delete state.dataCache[initialCacheKey];
-      delete state.dataCacheMeta[fullCacheKey];
-      delete state.dataCacheMeta[initialCacheKey];
-      delete state.metaCache[schemaCacheKey];
-      removeClientCache('tableFull', tableKey);
-      removeClientCache('tableInitial', tableKey);
-      removeClientCache('meta', schemaCacheKey);
-    }
-
-    function refreshChangedActiveTable(tableKey) {
-      const item = state.activeStep;
-      if (!item || item.tableKey !== tableKey) return Promise.resolve(null);
-      resetTablePage();
-      return loadActiveTablePage({ page: 1, resetQuery: true });
-    }
-
-    function refreshChangedConfigCaches() {
-      invalidatePersistentConfigCaches();
-      return fetchFreshAppBootstrapWithRuntimeConfig(true)
+    function refreshBootstrapInBackground() {
+      gasCall('getAppBootstrap')
         .then((bootstrap) => {
-          if (!bootstrap) return null;
+          if (!bootstrap || !Array.isArray(bootstrap.navigation)) return;
+          writeClientCache('bootstrap', 'app', bootstrap, CLIENT_CACHE_TTL.uiConfig);
           state.bootstrap = bootstrap;
-          state.uiConfig = bootstrap.uiConfig || state.uiConfig || {};
-          state.uiConfigHydrated = true;
+          state.uiConfig = state.uiConfigHydrated
+            ? state.uiConfig
+            : (bootstrap.uiConfig || state.uiConfig || {});
           applyUserAppConfig();
           syncDocumentTitle();
           renderSidebar();
-          renderPage();
-          return bootstrap;
         })
-        .catch((error) => {
-          console.warn('Changed app config refresh skipped:', error);
-          return null;
-        });
+        .catch((error) => console.warn('Bootstrap refresh skipped:', error));
     }
 
     function applyBootstrapInitialItemData(item) {
@@ -746,7 +562,7 @@
       if (!data || !Array.isArray(data.rows)) return false;
 
       markRouteScrollReset();
-      const initialCacheKey = getInitialTableRuntimeCacheKey(item.tableKey);
+      const initialCacheKey = `tableInitial:${item.tableKey}`;
       state.dataCache[initialCacheKey] = data;
       state.dataCacheMeta[initialCacheKey] = Date.now();
       setRouteLoading(false);
@@ -762,38 +578,19 @@
 
     function applyPersistentInitialItemData(item) {
       if (!item || !item.tableKey) return false;
-      const startedAt = Date.now();
-      const persistent = readPersistentTableData(item.tableKey);
-      const data = persistent.data;
+      const data = readClientCache('tableInitial', item.tableKey, CLIENT_CACHE_TTL.tableInitial);
       if (!data || !Array.isArray(data.rows)) return false;
-      console.info('Table cache hit:', {
-        tableKey: item.tableKey,
-        bucket: persistent.bucket,
-        rows: data.rows.length,
-      });
       markRouteScrollReset();
-      const cacheKey = persistent.bucket === 'tableFull'
-        ? getTableRuntimeCacheKey(item.tableKey)
-        : getInitialTableRuntimeCacheKey(item.tableKey);
-      state.dataCache[cacheKey] = data;
-      state.dataCacheMeta[cacheKey] = Date.now();
+      const initialCacheKey = `tableInitial:${item.tableKey}`;
+      state.dataCache[initialCacheKey] = data;
+      state.dataCacheMeta[initialCacheKey] = Date.now();
       setRouteLoading(false);
       applyLoadedItem(item, data);
       resetLoadedItemUiState(item);
-      applyServerPageState(data);
-      state.tableHydration[item.tableKey] = {
-        status: persistent.bucket === 'tableFull' ? 'ready' : 'loading',
-        source: 'localStorage',
-        startedAt,
-        loadedAt: persistent.bucket === 'tableFull' ? Date.now() : 0,
-        durationMs: persistent.bucket === 'tableFull' ? Date.now() - startedAt : 0,
-        rows: data.rows.length,
-        totalRows: Number(data.serverPage && (data.serverPage.totalRows || data.serverPage.totalEstimate) || data.rows.length),
-      };
       renderPage();
       resetRouteScrollAfterRender();
       scheduleActiveFormReadiness(item);
-      if (persistent.bucket !== 'tableFull') scheduleFullTableHydration(item);
+      scheduleFullTableHydration(item);
       schedulePostRoutePrefetch();
       return true;
     }
@@ -825,6 +622,7 @@
           renderSidebar();
           renderPage();
         }
+        refreshUiConfigInBackground();
         return state.uiConfig;
       }
       state.uiConfigHydrating = true;
@@ -846,15 +644,7 @@
       try {
         return await state.uiConfigHydrationPromise;
       } catch (error) {
-        console.error('Deferred UI config hydration failed:', {
-          message: error && error.message ? error.message : String(error || ''),
-          name: error && error.name ? error.name : 'Error',
-          stack: error && error.stack ? error.stack : '',
-          activeTableKey: state.activeTableKey || '',
-          appMode: state.appMode || '',
-          hasDeferredConfig: !!(state.uiConfig && state.uiConfig.deferredDataConfig),
-          hasCachedRuntimeConfig: !!readClientCache('uiConfig', 'runtime', CLIENT_CACHE_TTL.uiConfig),
-        });
+        console.warn('Deferred UI config hydration failed:', error);
         return state.uiConfig;
       } finally {
         state.uiConfigHydrating = false;
@@ -906,39 +696,14 @@
       }
       markRouteScrollReset();
       const cacheKey = getItemCacheKey(item);
-      let cached = cacheKey ? state.dataCache[cacheKey] : null;
-      if (!cached && item.tableKey) {
-        const persistent = readPersistentTableData(item.tableKey);
-        cached = persistent.data;
-        if (cached && cacheKey) {
-          state.dataCache[cacheKey] = cached;
-          state.dataCacheMeta[cacheKey] = Date.now();
-          const cacheReady = persistent.bucket === 'tableFull';
-          state.tableHydration[item.tableKey] = {
-            status: cacheReady ? 'ready' : 'loading',
-            source: 'localStorage',
-            startedAt: Date.now(),
-            loadedAt: cacheReady ? Date.now() : 0,
-            durationMs: 0,
-            rows: cached.rows.length,
-            totalRows: Number(cached.serverPage && (cached.serverPage.totalRows || cached.serverPage.totalEstimate) || cached.rows.length),
-          };
-          console.info('Table cache hit:', {
-            tableKey: item.tableKey,
-            bucket: persistent.bucket,
-            rows: cached.rows.length,
-          });
-        }
-      }
+      const cached = !options.force && cacheKey ? state.dataCache[cacheKey] : null;
       if (cached) {
         setRouteLoading(false);
         applyLoadedItem(item, cached);
         resetLoadedItemUiState(item);
-        if (item.tableKey) applyServerPageState(cached);
         renderPage();
         resetRouteScrollAfterRender();
-        if (item.tableKey) scheduleActiveFormReadiness(item);
-        if (item.tableKey) scheduleFullTableHydration(item);
+        scheduleActiveFormReadiness(item);
         return;
       }
 
@@ -947,23 +712,11 @@
         renderPage();
       }
       try {
-        if (item.tableKey) {
-          state.tableHydration[item.tableKey] = {
-            status: 'loading',
-            startedAt: Date.now(),
-            rows: 0,
-            totalRows: 0,
-          };
-          const initial = await fetchServerTablePage(item, {
-            page: 1,
-            pageSize: CLIENT_INITIAL_TABLE_BATCH_SIZE,
-            resetQuery: true,
-          });
-          writePersistentInitialTableData(item.tableKey, initial);
+        if (item.tableKey && !options.force) {
+          const initial = await fetchInitialTableData(item);
           setRouteLoading(false);
           applyLoadedItem(item, initial);
           resetLoadedItemUiState(item);
-          applyServerPageState(initial);
           renderPage();
           resetRouteScrollAfterRender();
           scheduleActiveFormReadiness(item);
@@ -978,6 +731,7 @@
         resetLoadedItemUiState(item);
         renderPage();
         resetRouteScrollAfterRender();
+        scheduleActiveFormReadiness(item);
         schedulePostRoutePrefetch();
       } catch (error) {
         showError(error);
@@ -995,7 +749,7 @@
       await loadItem({ id: tableKey, label: state.bootstrap.tables[tableKey].name, tableKey });
     }
 
-    function applyLoadedItem(item, loaded, options = {}) {
+    function applyLoadedItem(item, loaded) {
       const previousTableData = state.tableData;
       state.activeStep = item;
       state.activeTableKey = item.tableKey || '';
@@ -1004,8 +758,7 @@
       state.activeLinkUrl = item.linkUrl || '';
       state.tableData = item.tableKey ? loaded : null;
       state.overviewData = item.overviewKey ? loaded : null;
-      if (item.id) setStoredPreference('lastActiveStepId', item.id);
-      if (state.tableData !== previousTableData || options.forceTableVersion) bumpTableRenderVersion();
+      if (state.tableData !== previousTableData) bumpTableRenderVersion();
     }
 
     function bumpTableRenderVersion() {
@@ -1046,7 +799,7 @@
 
     function getItemCacheKey(item) {
       if (!item) return '';
-      if (item.tableKey) return getTableRuntimeCacheKey(item.tableKey);
+      if (item.tableKey) return `table:${item.tableKey}`;
       if (item.overviewKey) return `overview:${item.overviewKey}:${serializeClientFilters(getOverviewFilterState(item.overviewKey))}`;
       if (item.linkUrl) return `link:${item.pageType || 'link'}:${item.linkUrl}`;
       return '';
@@ -1055,59 +808,76 @@
     function readPersistentFullTableData(tableKey) {
       if (!tableKey) return null;
       const data = readClientCache('tableFull', tableKey, CLIENT_CACHE_TTL.tableFull);
-      if (isCurrentPersistentTableData_(data)) return data;
-      if (data) removeClientCache('tableFull', tableKey);
-      return null;
-    }
-
-    function readPersistentTableData(tableKey) {
-      if (!tableKey) return { data: null, bucket: '' };
-      const fullData = readPersistentFullTableData(tableKey);
-      if (fullData) return { data: fullData, bucket: 'tableFull' };
-      const initialData = readClientCache('tableInitial', tableKey, CLIENT_CACHE_TTL.tableInitial);
-      if (isCurrentPersistentTableData_(initialData)) return { data: initialData, bucket: 'tableInitial' };
-      if (initialData) removeClientCache('tableInitial', tableKey);
-      return { data: null, bucket: '' };
-    }
-
-    function isCurrentPersistentTableData_(data) {
-      return !!(data
-        && Array.isArray(data.rows)
-        && Number(data.clientTableCacheFormatVersion || 0) === CLIENT_TABLE_CACHE_FORMAT_VERSION);
-    }
-
-    function preparePersistentTableData_(data) {
-      return Object.assign({}, data, {
-        clientTableCacheFormatVersion: CLIENT_TABLE_CACHE_FORMAT_VERSION,
-      });
+      return data && Array.isArray(data.rows) ? data : null;
     }
 
     function writePersistentFullTableData(tableKey, data) {
       if (!tableKey || !data || !Array.isArray(data.rows)) return false;
-      const written = writeClientCache(
-        'tableFull',
-        tableKey,
-        preparePersistentTableData_(data),
-        CLIENT_CACHE_TTL.tableFull
-      );
-      if (written) {
-        removeClientCache('tableInitial', tableKey);
-        const initialCacheKey = getInitialTableRuntimeCacheKey(tableKey);
-        delete state.dataCache[initialCacheKey];
-        delete state.dataCacheMeta[initialCacheKey];
-        console.info('Table cache write:', { tableKey, bucket: 'tableFull', rows: data.rows.length });
-      }
-      return written;
+      return writeClientCache('tableFull', tableKey, data, CLIENT_CACHE_TTL.tableFull);
     }
 
     function writePersistentInitialTableData(tableKey, data) {
       if (!tableKey || !data || !Array.isArray(data.rows)) return false;
-      return writeClientCache(
-        'tableInitial',
-        tableKey,
-        preparePersistentTableData_(data),
-        CLIENT_CACHE_TTL.tableInitial
-      );
+      return writeClientCache('tableInitial', tableKey, data, CLIENT_CACHE_TTL.tableInitial);
+    }
+
+    function createClientInitialTableData(data) {
+      if (!data || !Array.isArray(data.rows)) return null;
+      const headers = Array.isArray(data.headers) ? data.headers : [];
+      const sourceRows = data.rows || [];
+      const limit = CLIENT_TABLE_INITIAL_ROW_LIMIT;
+      const rows = sourceRows.length > limit ? sourceRows.slice(sourceRows.length - limit) : sourceRows.slice();
+      const sourceWindow = data.dataWindow || {};
+      return Object.assign({}, data, {
+        rows,
+        summary: createClientTableSummary(headers, rows),
+        dataWindow: Object.assign({}, sourceWindow, {
+          mode: sourceWindow.mode || 'latest',
+          initial: true,
+          rowLimit: limit,
+          fullRowLimit: sourceWindow.fullRowLimit || sourceWindow.rowLimit || CLIENT_TABLE_FULL_ROW_LIMIT,
+          returnedRows: rows.length,
+          nextOffset: rows.length,
+          truncated: !!sourceWindow.truncated || sourceRows.length > rows.length,
+        }),
+      });
+    }
+
+    function createClientTableSummary(headers, rows) {
+      const summary = { rowCount: rows.length, totalRows: rows.length, fields: [] };
+      summary.fields = (headers || []).map((header, index) => ({
+        header,
+        index,
+        filled: rows.filter((row) => {
+          const value = row && row.values ? row.values[index] : row && row.record ? row.record[header] : '';
+          return value != null && String(value).trim() !== '';
+        }).length,
+      }));
+      return summary;
+    }
+
+    function refreshPersistentTableDataInBackground(item, cacheKey) {
+      const tableKey = item && item.tableKey ? item.tableKey : '';
+      if (!tableKey || !cacheKey) return;
+      const inFlightKey = `${cacheKey}:persistentRefresh`;
+      if (state.inFlight[inFlightKey]) return;
+      state.inFlight[inFlightKey] = gasCall('getTableData', tableKey, false)
+        .then((data) => {
+          if (!data || !Array.isArray(data.rows)) return;
+          state.dataCache[cacheKey] = data;
+          state.dataCacheMeta[cacheKey] = Date.now();
+          writePersistentFullTableData(tableKey, data);
+          const initial = createClientInitialTableData(data);
+          if (initial) writePersistentInitialTableData(tableKey, initial);
+          if (state.activeTableKey === tableKey && state.tableData && !(state.tableData.dataWindow && state.tableData.dataWindow.initial)) {
+            applyLoadedItem(item, data);
+            renderPageAfterTableHydration();
+          }
+        })
+        .catch((error) => console.warn('Persistent table refresh skipped:', error))
+        .finally(() => {
+          delete state.inFlight[inFlightKey];
+        });
     }
 
     function fetchItemData(item, force = false) {
@@ -1119,6 +889,7 @@
         if (persistentFull) {
           state.dataCache[cacheKey] = persistentFull;
           state.dataCacheMeta[cacheKey] = Date.now();
+          refreshPersistentTableDataInBackground(item, cacheKey);
           return Promise.resolve(persistentFull);
         }
       }
@@ -1144,6 +915,49 @@
       return promise;
     }
 
+    function fetchInitialTableData(item) {
+      const cacheKey = item && item.tableKey ? `tableInitial:${item.tableKey}` : '';
+      if (cacheKey && state.dataCache[cacheKey]) return Promise.resolve(state.dataCache[cacheKey]);
+      if (cacheKey && state.inFlight[cacheKey]) return state.inFlight[cacheKey];
+      const cachedInitial = item && item.tableKey
+        ? readClientCache('tableInitial', item.tableKey, CLIENT_CACHE_TTL.tableInitial)
+        : null;
+      if (cachedInitial && Array.isArray(cachedInitial.rows)) {
+        if (cacheKey) {
+          state.dataCache[cacheKey] = cachedInitial;
+          state.dataCacheMeta[cacheKey] = Date.now();
+        }
+        return Promise.resolve(cachedInitial);
+      }
+      const persistentFull = item && item.tableKey ? readPersistentFullTableData(item.tableKey) : null;
+      const initialFromFull = createClientInitialTableData(persistentFull);
+      if (initialFromFull) {
+        if (cacheKey) {
+          state.dataCache[cacheKey] = initialFromFull;
+          state.dataCacheMeta[cacheKey] = Date.now();
+        }
+        writePersistentInitialTableData(item.tableKey, initialFromFull);
+        return Promise.resolve(initialFromFull);
+      }
+
+      const request = gasCall('getTableDataInitial', item.tableKey, false);
+      const promise = request.then((data) => {
+        if (cacheKey) {
+          state.dataCache[cacheKey] = data;
+          state.dataCacheMeta[cacheKey] = Date.now();
+        }
+        if (item && item.tableKey && data && Array.isArray(data.rows)) {
+          writePersistentInitialTableData(item.tableKey, data);
+        }
+        return data;
+      }).catch(() => fetchItemData(item, false)).finally(() => {
+        if (cacheKey) delete state.inFlight[cacheKey];
+      });
+
+      if (cacheKey) state.inFlight[cacheKey] = promise;
+      return promise;
+    }
+
     function needsFullFieldSchema(data) {
       if (!data || !Array.isArray(data.fields) || !data.fields.length) return true;
       if (data.schemaMode === 'light') return true;
@@ -1161,8 +975,8 @@
         schemaGeneratedAt: schema.schemaGeneratedAt || schema.generatedAt || data.schemaGeneratedAt,
         schemaMode: schema.schemaMode || 'full',
       });
-      const fullKey = getTableRuntimeCacheKey(tableKey);
-      const initialKey = getInitialTableRuntimeCacheKey(tableKey);
+      const fullKey = `table:${tableKey}`;
+      const initialKey = `tableInitial:${tableKey}`;
       if (state.tableData === data || state.activeTableKey === tableKey) state.tableData = next;
       if (state.editingTableData === data || (state.editing && state.editing.tableKey === tableKey)) state.editingTableData = next;
       if (state.dataCache[fullKey] === data) state.dataCache[fullKey] = next;
@@ -1172,12 +986,13 @@
 
     async function ensureTableFieldSchemaForForms(tableKey, data) {
       if (!tableKey || !needsFullFieldSchema(data)) return data;
-      const cacheKey = getSchemaRuntimeCacheKey(tableKey);
+      const cacheKey = `schema:table:${tableKey}`;
       const cached = state.metaCache[cacheKey];
       if (cached && cached.formulaAware === true) return mergeTableFieldSchema(tableKey, data, cached);
       const persistent = readClientCache('meta', cacheKey, CLIENT_CACHE_TTL.meta);
       if (persistent && persistent.formulaAware === true) {
         state.metaCache[cacheKey] = persistent;
+        refreshTableSchemaInBackground(tableKey, data, cacheKey);
         return mergeTableFieldSchema(tableKey, data, persistent);
       }
       const inFlightKey = `schema:${tableKey}`;
@@ -1213,371 +1028,122 @@
 
     function scheduleActiveFormReadiness(item) {
       const tableKey = item && item.tableKey ? item.tableKey : '';
-      if (!tableKey || state.formReadinessPromises[tableKey]) {
-        return tableKey ? state.formReadinessPromises[tableKey] || Promise.resolve() : Promise.resolve();
-      }
-      const startedAt = Date.now();
-      let ready = false;
+      if (!tableKey || state.formReadinessPromises[tableKey]) return;
       const promise = new Promise((resolve) => {
         window.requestAnimationFrame(() => window.setTimeout(resolve, 120));
       })
         .then(() => warmActiveFormReadiness(item))
-        .then((result) => {
-          ready = !!result;
-          console.info('Form preload performance:', {
-            tableKey,
-            ms: Date.now() - startedAt,
-            ready: !!result,
-          });
-          return result;
-        })
-        .catch((error) => {
-          console.warn('Form preload skipped:', error);
-          return null;
-        })
+        .catch((error) => console.warn('Form readiness skipped:', error))
         .finally(() => {
-          if ((!ready || state.activeTableKey !== tableKey) && state.formReadinessPromises[tableKey] === promise) {
-            delete state.formReadinessPromises[tableKey];
+          if (state.formReadinessPromises[tableKey] === promise) {
+            window.setTimeout(() => {
+              if (state.formReadinessPromises[tableKey] === promise) delete state.formReadinessPromises[tableKey];
+            }, 3000);
           }
         });
       state.formReadinessPromises[tableKey] = promise;
-      return promise;
     }
 
     async function warmActiveFormReadiness(item) {
       const tableKey = item && item.tableKey ? item.tableKey : '';
-      if (!tableKey || state.activeTableKey !== tableKey) return null;
+      if (!tableKey || state.activeTableKey !== tableKey) return;
       await hydrateDeferredUiConfig();
-      if (state.activeTableKey !== tableKey) return null;
-      const data = state.tableData
-        || state.dataCache[getInitialTableRuntimeCacheKey(tableKey)]
-        || state.dataCache[getTableRuntimeCacheKey(tableKey)];
-      return data ? ensureTableFieldSchemaForForms(tableKey, data) : null;
+      if (state.activeTableKey !== tableKey) return;
+      const data = state.tableData || state.dataCache[`tableInitial:${tableKey}`] || state.dataCache[`table:${tableKey}`];
+      if (data) await ensureTableFieldSchemaForForms(tableKey, data);
     }
 
     function scheduleFullTableHydration(item) {
+      const cacheKey = getItemCacheKey(item);
       const tableKey = item && item.tableKey ? item.tableKey : '';
-      if (!tableKey || state.activeTableKey !== tableKey) return;
-      const serverPage = state.tableData && state.tableData.serverPage;
-      if (!serverPage) return;
-      const previousHydration = state.tableHydration[tableKey] || {};
-      const startedAt = Number(previousHydration.startedAt || Date.now());
-      if (serverPage.fullyLoaded) {
-        const loadedAt = Date.now();
-        const cacheKey = getItemCacheKey(item);
-        if (cacheKey) {
-          state.dataCache[cacheKey] = state.tableData;
-          state.dataCacheMeta[cacheKey] = loadedAt;
-        }
-        const persisted = writePersistentFullTableData(tableKey, state.tableData);
-        if (!persisted) console.warn('Full table localStorage cache was skipped:', tableKey);
-        state.tableHydration[tableKey] = {
-          status: 'ready',
-          source: previousHydration.source || '',
-          startedAt,
-          loadedAt,
-          durationMs: loadedAt - startedAt,
-          rows: state.tableData && state.tableData.rows ? state.tableData.rows.length : 0,
-          totalRows: state.tableData && state.tableData.rows ? state.tableData.rows.length : 0,
-        };
-        if (typeof refreshTableHydrationIndicator === 'function') refreshTableHydrationIndicator();
-        return;
-      }
-      const token = `${tableKey}:background:${Date.now()}`;
-      state.tableBackgroundLoadToken = token;
+      if (!cacheKey || !tableKey) return;
+      const token = `${tableKey}:${Date.now()}`;
+      state.activeHydrationToken = token;
       state.tableHydration[tableKey] = {
         status: 'scheduled',
-        startedAt,
+        startedAt: Date.now(),
         initialRows: state.tableData && state.tableData.rows ? state.tableData.rows.length : 0,
-        rows: state.tableData && state.tableData.rows ? state.tableData.rows.length : 0,
-        totalRows: Number(serverPage.totalRows || serverPage.totalEstimate || 0),
       };
-      if (typeof refreshTableHydrationIndicator === 'function') refreshTableHydrationIndicator();
-      const startHydration = () => {
-        if (state.activeTableKey === tableKey && state.tableBackgroundLoadToken === token) {
-          hydrateTableDataInBackground_(item, token);
-        }
-      };
-      const readiness = state.formReadinessPromises[tableKey];
-      if (!readiness) {
-        window.requestAnimationFrame(() => window.setTimeout(startHydration, 80));
-        return;
-      }
-      let started = false;
-      const startOnce = () => {
-        if (started) return;
-        started = true;
-        startHydration();
-      };
-      readiness.finally(startOnce);
-      window.setTimeout(startOnce, 2500);
-    }
 
-    async function hydrateTableDataInBackground_(item, token) {
-      const tableKey = item && item.tableKey ? item.tableKey : '';
-      let accumulated = state.tableData;
-      if (!tableKey || !accumulated || !accumulated.serverPage) return;
-      const previousHydration = state.tableHydration[tableKey] || {};
-      const startedAt = Number(previousHydration.startedAt || Date.now());
-      state.tableHydration[tableKey] = {
-        status: 'loading',
-        startedAt,
-        initialRows: accumulated.rows ? accumulated.rows.length : 0,
-        rows: accumulated.rows ? accumulated.rows.length : 0,
-        totalRows: Number(accumulated.serverPage.totalRows || accumulated.serverPage.totalEstimate || 0),
-      };
-      if (typeof refreshTableHydrationIndicator === 'function') refreshTableHydrationIndicator();
-      try {
-        while (accumulated.serverPage.nextCursor !== '') {
-          if (state.activeTableKey !== tableKey || state.tableBackgroundLoadToken !== token) return;
-          const nextPage = Number(accumulated.serverPage.page || 1) + 1;
-          const incoming = await fetchServerTablePage(item, {
-            page: nextPage,
-            pageSize: CLIENT_BACKGROUND_TABLE_BATCH_SIZE,
-            cursor: Number(accumulated.serverPage.nextCursor || 0),
-            snapshotEndRow: Number(accumulated.serverPage.snapshotEndRow || 0),
-            resetQuery: true,
-          });
-          if (state.activeTableKey !== tableKey || state.tableBackgroundLoadToken !== token) return;
-          accumulated = mergeServerTablePage_(accumulated, incoming);
-          state.tableData = accumulated;
-          state.tableBackgroundRetries[tableKey] = 0;
-          bumpTableRenderVersion();
-          state.tableHydration[tableKey] = Object.assign({}, state.tableHydration[tableKey], {
-            status: 'loading',
-            rows: accumulated.rows ? accumulated.rows.length : 0,
-            totalRows: Number(accumulated.serverPage.totalRows || accumulated.serverPage.totalEstimate || 0),
-          });
-          if (typeof refreshTableHydrationIndicator === 'function') refreshTableHydrationIndicator();
-        }
-        accumulated = await hydrateAppendedTableRows_(item, accumulated, token);
-        if (state.activeTableKey !== tableKey || state.tableBackgroundLoadToken !== token) return;
-        accumulated.serverPage = Object.assign({}, accumulated.serverPage, {
-          fullyLoaded: true,
-          loadedRows: accumulated.rows ? accumulated.rows.length : 0,
-          totalRows: accumulated.rows ? accumulated.rows.length : 0,
-          totalEstimate: accumulated.rows ? accumulated.rows.length : 0,
-          totalExact: true,
-          nextCursor: '',
+      const start = () => {
+        if (!isCurrentHydrationToken_(tableKey, token)) return;
+        const formReady = state.formReadinessPromises && state.formReadinessPromises[tableKey]
+          ? state.formReadinessPromises[tableKey]
+          : Promise.resolve();
+        formReady.finally(() => {
+          if (isCurrentHydrationToken_(tableKey, token)) hydrateFullTableData(item, token);
         });
-        const cacheKey = getItemCacheKey(item);
-        state.dataCache[cacheKey] = accumulated;
-        state.dataCacheMeta[cacheKey] = Date.now();
-        if (!writePersistentFullTableData(tableKey, accumulated)) {
-          console.warn('Full table localStorage cache was skipped:', tableKey);
-        }
-        applyLoadedItem(item, accumulated, { forceTableVersion: true });
-        applyServerPageState(accumulated);
-        state.tableHydration[tableKey] = {
-          status: 'ready',
-          startedAt,
-          loadedAt: Date.now(),
-          durationMs: Date.now() - startedAt,
-          rows: accumulated.rows ? accumulated.rows.length : 0,
-          totalRows: accumulated.rows ? accumulated.rows.length : 0,
-        };
-        delete state.tableBackgroundRetries[tableKey];
-        renderPageAfterTableHydration();
-      } catch (error) {
-        if (state.activeTableKey !== tableKey || state.tableBackgroundLoadToken !== token) return;
-        const retryCount = Number(state.tableBackgroundRetries[tableKey] || 0) + 1;
-        const retryDelay = Math.min(30000, 1500 * Math.pow(2, Math.min(retryCount - 1, 5)));
-        state.tableBackgroundRetries[tableKey] = retryCount;
-        state.tableHydration[tableKey] = {
-          status: 'retrying',
-          startedAt,
-          failedAt: Date.now(),
-          retryCount,
-          rows: accumulated && accumulated.rows ? accumulated.rows.length : 0,
-          totalRows: accumulated && accumulated.serverPage
-            ? Number(accumulated.serverPage.totalRows || accumulated.serverPage.totalEstimate || 0)
-            : 0,
-        };
-        if (typeof refreshTableHydrationIndicator === 'function') refreshTableHydrationIndicator();
-        console.warn(`Background table hydration retry ${retryCount}:`, error);
-        window.setTimeout(() => {
-          if (state.activeTableKey === tableKey && state.tableBackgroundLoadToken === token) {
-            scheduleFullTableHydration(item);
-          }
-        }, retryDelay);
-      }
+      };
+      const scheduleIdle = () => {
+        if ('requestIdleCallback' in window) window.requestIdleCallback(start, { timeout: 1800 });
+        else window.setTimeout(start, 350);
+      };
+      window.requestAnimationFrame(() => window.setTimeout(scheduleIdle, 450));
     }
 
-    function fetchServerTablePage(item, options = {}) {
+    function hydrateFullTableData(item, token) {
+      const cacheKey = getItemCacheKey(item);
       const tableKey = item && item.tableKey ? item.tableKey : '';
-      if (!tableKey) return Promise.reject(new Error('Missing table key.'));
-      const startedAt = Date.now();
-      return gasCall('getTablePage', {
-        tableKey,
-        page: Math.max(1, Number(options.page || state.tablePage || 1)),
-        pageSize: Math.max(50, Math.min(1000, Number(options.pageSize || state.tablePageSize || CLIENT_INITIAL_TABLE_BATCH_SIZE))),
-        cursor: Math.max(0, Number(options.cursor || 0)),
-        snapshotEndRow: Math.max(0, Number(options.snapshotEndRow || 0)),
-        query: '',
-        status: '',
-        filters: {},
-        sort: { header: '', direction: 1 },
-        filterHeaders: [],
-      }).then((data) => {
-        console.info('Table page performance:', Object.assign({
-          tableKey,
-          rpcMs: Date.now() - startedAt,
-        }, data && data.performance || {}));
-        return data;
-      });
-    }
+      if (!cacheKey || !tableKey || !isCurrentHydrationToken_(tableKey, token)) return;
 
-    function fetchServerTableDelta(item, afterRowNumber) {
-      const tableKey = item && item.tableKey ? item.tableKey : '';
-      if (!tableKey) return Promise.reject(new Error('Missing table key.'));
-      return gasCall('getTableDataDelta', {
-        tableKey,
-        afterRowNumber: Math.max(0, Number(afterRowNumber || 0)),
-        scanLimit: CLIENT_BACKGROUND_TABLE_BATCH_SIZE,
-      });
-    }
-
-    async function hydrateAppendedTableRows_(item, current, token) {
-      const tableKey = item && item.tableKey ? item.tableKey : '';
-      let accumulated = current;
-      let scannedThroughRow = Number(
-        accumulated && accumulated.serverPage && accumulated.serverPage.snapshotEndRow || 0
-      );
-      if (!tableKey || !scannedThroughRow) return accumulated;
-
-      let hasMore = true;
-      while (hasMore) {
-        if (state.activeTableKey !== tableKey || state.tableBackgroundLoadToken !== token) return accumulated;
-        const delta = await fetchServerTableDelta(item, scannedThroughRow);
-        if (state.activeTableKey !== tableKey || state.tableBackgroundLoadToken !== token) return accumulated;
-        const deltaPage = delta && delta.deltaPage ? delta.deltaPage : {};
-        accumulated = mergeTableDelta_(accumulated, delta);
-        const nextScannedThroughRow = Number(deltaPage.scannedThroughRow || scannedThroughRow);
-        hasMore = !!deltaPage.hasMore && nextScannedThroughRow > scannedThroughRow;
-        scannedThroughRow = Math.max(scannedThroughRow, nextScannedThroughRow);
-        accumulated.serverPage = Object.assign({}, accumulated.serverPage, {
-          snapshotEndRow: Math.max(
-            scannedThroughRow,
-            Number(deltaPage.snapshotEndRow || 0)
-          ),
-          loadedRows: accumulated.rows ? accumulated.rows.length : 0,
-        });
-        state.tableData = accumulated;
-        bumpTableRenderVersion();
-        state.tableHydration[tableKey] = Object.assign({}, state.tableHydration[tableKey], {
-          status: 'loading',
-          rows: accumulated.rows ? accumulated.rows.length : 0,
-        });
-        if (typeof refreshTableHydrationIndicator === 'function') refreshTableHydrationIndicator();
-      }
-      return accumulated;
-    }
-
-    function loadActiveTablePage(options = {}) {
-      const item = state.activeStep;
-      const tableKey = item && item.tableKey ? item.tableKey : state.activeTableKey;
-      if (!tableKey || state.tableDataLoading) return Promise.resolve(null);
-      const activeItem = item && item.tableKey === tableKey ? item : { id: tableKey, label: tableKey, tableKey };
-      const token = `${tableKey}:page:${Date.now()}`;
-      state.tablePageRequestToken = token;
-      state.tableBackgroundLoadToken = '';
       state.tableHydration[tableKey] = {
         status: 'loading',
         startedAt: Date.now(),
-        rows: 0,
-        totalRows: state.tableData && state.tableData.serverPage
-          ? Number(state.tableData.serverPage.totalRows || state.tableData.serverPage.totalEstimate || 0)
-          : 0,
+        initialRows: state.tableData && state.tableData.rows ? state.tableData.rows.length : 0,
       };
-      setTableDataLoading(true);
-      renderPageAfterTableHydration();
-      return fetchServerTablePage(activeItem, options)
-        .then((data) => {
-          if (state.tablePageRequestToken !== token || state.activeTableKey !== tableKey) return null;
-          if (!data || !Array.isArray(data.rows)) throw new Error('Invalid table page response.');
-          const loadedData = data;
-          const cacheKey = getItemCacheKey(activeItem);
-          state.dataCache[cacheKey] = loadedData;
-          state.dataCacheMeta[cacheKey] = Date.now();
-          removeClientCache('tableFull', tableKey);
-          writePersistentInitialTableData(tableKey, loadedData);
-          applyLoadedItem(activeItem, loadedData, { forceTableVersion: true });
-          applyServerPageState(loadedData);
-          state.tableHydration[tableKey] = Object.assign({}, state.tableHydration[tableKey], {
-            status: 'loading',
-            rows: loadedData.rows.length,
-            totalRows: Number(loadedData.serverPage && (loadedData.serverPage.totalRows || loadedData.serverPage.totalEstimate) || loadedData.rows.length),
-          });
-          if (typeof updateDetailSelectionAfterFilters === 'function') updateDetailSelectionAfterFilters();
-          scheduleFullTableHydration(activeItem);
-          return loadedData;
-        })
-        .catch((error) => {
-          showError(error);
-          return null;
-        })
-        .finally(() => {
-          if (state.tablePageRequestToken !== token) return;
-          setTableDataLoading(false);
-          renderPageAfterTableHydration();
+      if (state.activeTableKey === tableKey && state.tableData && state.tableData.dataWindow && state.tableData.dataWindow.initial) {
+        window.requestAnimationFrame(() => {
+          if (state.activeTableKey === tableKey && state.tableData && state.tableData.dataWindow && state.tableData.dataWindow.initial) {
+            renderPage();
+          }
         });
+      }
+
+      const request = state.dataCache[cacheKey]
+        ? Promise.resolve(state.dataCache[cacheKey])
+        : state.inFlight[cacheKey] || fetchItemData(item, false);
+
+      request
+        .then((data) => promoteHydratedTableData(item, cacheKey, data, token))
+        .catch((error) => console.warn('Full table hydration failed:', error));
     }
 
-    function mergeServerTablePage_(current, incoming) {
-      if (!current || !Array.isArray(current.rows)) return incoming;
-      const rows = current.rows.slice();
-      const rowNumbers = new Set(rows.map((row) => Number(row && row.rowNumber)).filter(Number.isFinite));
-      (incoming.rows || []).forEach((row) => {
-        const rowNumber = Number(row && row.rowNumber);
-        if (Number.isFinite(rowNumber) && rowNumbers.has(rowNumber)) return;
-        rows.push(row);
-        if (Number.isFinite(rowNumber)) rowNumbers.add(rowNumber);
+    function promoteHydratedTableData(item, cacheKey, data, token) {
+      const tableKey = item && item.tableKey ? item.tableKey : '';
+      if (!tableKey || state.activeTableKey !== tableKey) return;
+      if (!isCurrentHydrationToken_(tableKey, token)) return;
+      if (!data || !Array.isArray(data.rows)) return;
+
+      const currentRows = state.tableData && Array.isArray(state.tableData.rows) ? state.tableData.rows.length : 0;
+      const currentWindow = state.tableData && state.tableData.dataWindow ? state.tableData.dataWindow : {};
+      const nextWindow = data.dataWindow || {};
+      const shouldPromote = !!currentWindow.initial || !nextWindow.initial || data.rows.length >= currentRows;
+      if (!shouldPromote) return;
+
+      state.dataCache[cacheKey] = data;
+      state.dataCacheMeta[cacheKey] = Date.now();
+      writePersistentFullTableData(tableKey, data);
+      const initial = createClientInitialTableData(data);
+      if (initial) writePersistentInitialTableData(tableKey, initial);
+      state.tableHydration[tableKey] = {
+        status: 'ready',
+        loadedAt: Date.now(),
+        rows: data.rows.length,
+      };
+      applyLoadedItem(item, data);
+      if (state.tableViewMode === 'detail' && !state.detailRowNumber) {
+        const firstRow = filteredRows()[0];
+        state.detailRowNumber = firstRow ? firstRow.rowNumber : null;
+      }
+      renderPageAfterTableHydration();
+      window.requestAnimationFrame(() => {
+        if (state.activeTableKey === tableKey && state.tableData === data) renderPageAfterTableHydration();
       });
-      const currentPage = current.serverPage || {};
-      const incomingPage = incoming.serverPage || {};
-      return Object.assign({}, current, incoming, {
-        rows,
-        filterFacets: incoming.filterFacets && Object.keys(incoming.filterFacets).length
-          ? incoming.filterFacets
-          : current.filterFacets,
-        serverPage: Object.assign({}, currentPage, incomingPage, {
-          page: Math.max(Number(currentPage.page || 1), Number(incomingPage.page || 1)),
-          loadedRows: rows.length,
-          startIndex: 0,
-          endIndex: rows.length,
-        }),
-      });
+      keepRouteAtTopAfterAsyncRender();
     }
 
-    function mergeTableDelta_(current, delta) {
-      if (!current || !Array.isArray(current.rows) || !delta || !Array.isArray(delta.rows)) return current;
-      const rows = current.rows.slice();
-      const rowNumbers = new Set(rows.map((row) => Number(row && row.rowNumber)).filter(Number.isFinite));
-      delta.rows.forEach((row) => {
-        const rowNumber = Number(row && row.rowNumber);
-        if (Number.isFinite(rowNumber) && rowNumbers.has(rowNumber)) return;
-        rows.push(row);
-        if (Number.isFinite(rowNumber)) rowNumbers.add(rowNumber);
-      });
-      rows.sort((left, right) => Number(left && left.rowNumber || 0) - Number(right && right.rowNumber || 0));
-      return Object.assign({}, current, {
-        rows,
-        summary: makeClientSummary(current.headers || [], rows),
-      });
-    }
-
-    function applyServerPageState(data) {
-      const serverPage = data && data.serverPage ? data.serverPage : null;
-      if (!serverPage) return;
-      state.tablePage = Math.max(1, Number(serverPage.page || 1));
-      state.tablePageSize = CLIENT_INITIAL_TABLE_BATCH_SIZE;
-    }
-
-    function setTableDataLoading(loading) {
-      state.tableDataLoading = !!loading;
-      document.body.classList.toggle('table-data-loading', !!loading);
-      document.body.setAttribute('aria-busy', loading ? 'true' : 'false');
-      if (el.content) el.content.setAttribute('aria-busy', loading ? 'true' : 'false');
+    function isCurrentHydrationToken_(tableKey, token) {
+      return !!tableKey && state.activeTableKey === tableKey && state.activeHydrationToken === token;
     }
 
     function renderPageAfterTableHydration() {
@@ -1768,7 +1334,7 @@
 
     function prefetchTableFormSchema(tableKey) {
       if (!tableKey) return Promise.resolve(null);
-      const cacheKey = getSchemaRuntimeCacheKey(tableKey);
+      const cacheKey = `schema:table:${tableKey}`;
       if (state.metaCache[cacheKey]) return Promise.resolve(state.metaCache[cacheKey]);
       const persistent = readClientCache('meta', cacheKey, CLIENT_CACHE_TTL.meta);
       if (persistent && persistent.formulaAware === true) {

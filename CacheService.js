@@ -36,11 +36,7 @@ function setCached_(key, value, ttlSeconds) {
   }
 }
 
-function invalidateDataCache_(options) {
-  const strict = !!(options && options.strict);
-  const changeVersion = typeof markAllAppCachesChanged_ === 'function'
-    ? markAllAppCachesChanged_()
-    : '';
+function invalidateDataCache_() {
   try {
     const tables = getCached_(cacheKey_('registry', 'tables')) || getTables_(false);
     const overviewKeys = typeof getOverviewKeys_ === 'function' ? getOverviewKeys_() : [];
@@ -65,31 +61,12 @@ function invalidateDataCache_(options) {
         cacheKey_('registry', 'configAutoSync'),
       ]);
     CacheService.getScriptCache().removeAll(keys);
-    return {
-      ok: true,
-      removedKeyCount: keys.length,
-      changeVersion,
-    };
   } catch (error) {
-    if (strict) throw error;
-    return {
-      ok: false,
-      removedKeyCount: 0,
-      changeVersion,
-      message: error && error.message ? error.message : String(error),
-    };
+    // Best-effort cache invalidation.
   }
 }
 
 function invalidateTableDataCache_(tableKey) {
-  let tableVersion = '';
-  try {
-    if (typeof markTableCacheChanged_ === 'function') {
-      tableVersion = markTableCacheChanged_(tableKey) || '';
-    }
-  } catch (error) {
-    // Cache removal can still continue when the manifest version cannot be written.
-  }
   try {
     const table = (getCached_(cacheKey_('registry', 'tables')) || getTables_(false))[tableKey] || null;
     const keys = [
@@ -99,37 +76,12 @@ function invalidateTableDataCache_(tableKey) {
       tableScopedCacheKey_('tableMeta', tableKey, table),
     ].filter(Boolean);
     CacheService.getScriptCache().removeAll(keys);
-    return {
-      ok: true,
-      tableVersion: String(tableVersion || ''),
-      removedKeyCount: keys.length,
-    };
   } catch (error) {
-    return {
-      ok: false,
-      tableVersion: String(tableVersion || ''),
-      removedKeyCount: 0,
-      message: error && error.message ? error.message : String(error),
-    };
+    // Best-effort targeted invalidation.
   }
 }
 
-function invalidateNativeTableRegistryCache_(spreadsheetId) {
-  const targetSpreadsheetId = spreadsheetId || SPREADSHEET_ID;
-  const keys = [
-    cacheKey_('registry', 'tables'),
-    cacheKey_('registry', 'nativeTables'),
-    cacheKey_('registry', `nativeTables:${targetSpreadsheetId}`),
-  ];
-  CacheService.getScriptCache().removeAll(keys);
-  return {
-    ok: true,
-    removedKeyCount: keys.length,
-  };
-}
-
 function invalidateConfigTableCache_(configKey) {
-  if (typeof markConfigCacheChanged_ === 'function') markConfigCacheChanged_(configKey);
   try {
     const keys = [
       cacheKey_('configTable', configKey),

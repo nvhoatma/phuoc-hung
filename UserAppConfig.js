@@ -72,10 +72,6 @@ function readUserConfigRecords_(configKey, forceRefresh) {
     const records = rows.map((row) => row.record || {});
     return normalizeUserConfigRecords_(configKey, records);
   } catch (error) {
-    logAppDiagnostic_('warn', 'user_config_records_skipped', {
-      configKey: configKey || '',
-      forceRefresh: !!forceRefresh,
-    }, error);
     return [];
   }
 }
@@ -375,8 +371,8 @@ function buildUserFormConfig_(records, context) {
       const columns = clampFormColumnCount_(recordValue_(record, ['columns', 'layout_columns', 'column_count']), formType === 'full' || (linkedView && linkedView.type === 'detail') ? 3 : 1);
       const columnOrder = parseUserConfigList_(recordValue_(record, ['column_order', 'field_order', 'columns_order']));
       const hiddenColumns = parseUserConfigList_(recordValue_(record, ['hidden_columns', 'hide_columns', 'hidden_fields']));
-      const nestedTables = parseUserConfigList_(recordValue_(record, ['nested_table', 'nested_tables', 'related_table', 'related_tables']));
-      const nestedTablesExplicit = nestedTables.length > 0;
+      const explicitNestedTables = parseUserConfigList_(recordValue_(record, ['nested_table', 'nested_tables', 'related_table', 'related_tables']));
+      const inferredNestedTables = inferUserNestedTablesForForm_(pageId, linkedView, context);
       const sections = parseUserFormSections_(recordValue_(record, ['section_layout', 'form_sections', 'sections']));
       const mainDisplayName = recordValue_(record, [
         'main_display_name',
@@ -402,8 +398,7 @@ function buildUserFormConfig_(records, context) {
         hiddenColumns,
         mainDisplayName,
         sections,
-        nestedTables: uniqueUserConfigList_(nestedTables),
-        nestedTablesExplicit,
+        nestedTables: uniqueUserConfigList_(explicitNestedTables.concat(inferredNestedTables)),
       };
     })
     .filter((form) => !isLegacyViewFormConfig_(form))
@@ -416,6 +411,16 @@ function buildUserFormConfig_(records, context) {
       if (form.viewId) acc.byViewId[form.viewId] = form;
       return acc;
     }, { byId: {}, byPageId: {}, byViewId: {} });
+}
+
+function inferUserNestedTablesForForm_(pageId, linkedView, context) {
+  const page = pageId && context && context.pages && context.pages.byId ? context.pages.byId[pageId] : null;
+  const sourceTableKey = (page && page.tableKey) || (linkedView && linkedView.tableKey) || '';
+  if (!sourceTableKey || !context || !context.relationships || !context.relationships.list) return [];
+  return context.relationships.list
+    .filter((relationship) => relationship.sourceTableKey === sourceTableKey)
+    .map((relationship) => relationship.targetTable || getUserTableNameByKey_(relationship.targetTableKey, context))
+    .filter(Boolean);
 }
 
 function getUserTableNameByKey_(tableKey, context) {

@@ -23,16 +23,16 @@
 
     function renderAppModeSwitcher(extraClass) {
       const targetMode = state.appMode === 'config' ? 'user' : 'config';
-      const canSwitchMode = targetMode !== 'config' || canOpenConfigApp();
+      if (targetMode === 'config' && !canOpenConfigApp()) return '';
       const label = targetMode === 'config' ? 'Config app' : 'User app';
       const icon = targetMode === 'config' ? ICONS.gear : ICONS.userApp;
       return `
         <div class="app-mode-switcher ${extraClass || ''}" role="group" aria-label="App mode">
           ${renderShellAppSlot()}
           ${renderModeUtilityControl()}
-          ${canSwitchMode ? `<button class="mode-icon-switcher" type="button" data-app-mode="${targetMode}" title="${escapeAttr(label)}" aria-label="Switch to ${escapeAttr(label)}">
+          <button class="mode-icon-switcher" type="button" data-app-mode="${targetMode}" title="${escapeAttr(label)}" aria-label="Switch to ${escapeAttr(label)}">
             ${icon}<span>${escapeHtml(label)}</span>
-          </button>` : ''}
+          </button>
         </div>
       `;
     }
@@ -46,12 +46,12 @@
     }
 
     function renderModeUtilityControl() {
-      return `${renderHardRefreshButton()}${state.appMode === 'config' ? '' : renderLanguagePicker()}`;
+      return state.appMode === 'config' ? renderHardRefreshButton() : renderLanguagePicker();
     }
 
     function renderHardRefreshButton() {
       return `
-        <button class="mode-icon-switcher hard-refresh-toggle" type="button" data-hard-refresh title="Hard refresh" aria-label="Clear cached data and settings, then reload app">
+        <button class="mode-icon-switcher hard-refresh-toggle" type="button" data-hard-refresh title="Hard refresh" aria-label="Clear local cache and reload settings">
           ${ICONS.hardRefresh}<span>Hard refresh</span>
         </button>
       `;

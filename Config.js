@@ -10,7 +10,7 @@ const SPREADSHEET_ID = getBoundSpreadsheetId_();
 const DATA_START_COLUMN = 8; // System-table fallback only.
 const HEADER_ROW = 1; // System-table fallback only.
 const DATA_START_ROW = 2; // System-table fallback only.
-const CACHE_VERSION = 'v70';
+const CACHE_VERSION = 'v66';
 const CACHE_TTL_SECONDS = 300;
 const UI_CONFIG_CACHE_TTL_SECONDS = 3600;
 const CONFIG_TABLE_CACHE_TTL_SECONDS = 3600;
@@ -381,16 +381,6 @@ function resolveProcessTableFromIndexRow_(appSpreadsheet, indexRow, sourceHints,
       nativeRegistry = getNativeRegistryForIndex_(spreadsheetId, forceRefresh, nativeRegistryCache);
     } catch (error) {
       accessFallbackReason = error && error.message ? error.message : String(error);
-      logAppDiagnostic_('warn', 'table_registry_source_unavailable', {
-        tableName: indexRow.tableName || '',
-        department: indexRow.department || '',
-        group: indexRow.group || '',
-        spreadsheetId,
-        gid: indexRow.parsedLink && indexRow.parsedLink.gid ? indexRow.parsedLink.gid : '',
-        candidateIndex: index,
-        candidateCount: candidates.length,
-        forceRefresh: !!forceRefresh,
-      }, error);
       continue;
     }
 

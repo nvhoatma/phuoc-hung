@@ -119,7 +119,7 @@ function syncConfigAppGeneratedRows_() {
 
 function ensureConfigPageSchema_(pageItem) {
   try {
-    const requiredHeaders = ['Title column', 'Data mode', 'AI insight enable', 'AI insight column'];
+    const requiredHeaders = ['Title column', 'Data mode'];
     if (!pageItem || !pageItem.table) return { addedCount: 0, skipped: ['missing_page_table'] };
     const table = pageItem.table;
     const headers = getConfigAutoHeadersForTable_(table);
