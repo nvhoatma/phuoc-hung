@@ -1,0 +1,1095 @@
+    /*
+      Shared client helpers/selectors.
+      Keep pure helpers here so ClientActions stays focused on user actions
+      and ClientViews stays focused on markup/rendering.
+    */
+    function clearOverviewClientCache() {
+      Object.keys(state.dataCache)
+        .filter((key) => key.startsWith('overview:'))
+        .forEach((key) => delete state.dataCache[key]);
+    }
+
+    function filteredRows() {
+      if (!state.tableData) return [];
+      const signature = getFilteredRowsSignature();
+      if (state.filteredRowsCache && state.filteredRowsCache.signature === signature) {
+        return state.filteredRowsCache.rows;
+      }
+      const headers = state.tableData.headers;
+      const statusHeader = headers.find((header) => /status|stage/i.test(header));
+      const query = state.query.trim().toLowerCase();
+      let rows = state.tableData.rows.filter((row) => {
+        const matchQuery = !query || row.values.join(' ').toLowerCase().includes(query);
+        const matchStatus = !state.status || (statusHeader && row.record[statusHeader] === state.status);
+        const matchSmartFilters = matchesTableFilters(row);
+        return matchQuery && matchStatus && matchSmartFilters;
+      });
+
+      if (state.sort.header) {
+        rows = [...rows].sort((a, b) => {
+          const left = a.record[state.sort.header] || '';
+          const right = b.record[state.sort.header] || '';
+          return left.localeCompare(right, 'vi', { numeric: true }) * state.sort.direction;
+        });
+      }
+
+      state.filteredRowsCache = { signature, rows };
+      return rows;
+    }
+
+    function getFilteredRowsSignature() {
+      const sort = state.sort || {};
+      return [
+        state.activeTableKey || '',
+        state.tableDataVersion || 0,
+        state.query || '',
+        state.status || '',
+        serializeTableFiltersForSignature(state.tableFilters),
+        sort.header || '',
+        sort.direction || 1,
+      ].join('\u001f');
+    }
+
+    function serializeTableFiltersForSignature(filters) {
+      return Object.keys(filters || {})
+        .sort()
+        .map((key) => `${key}:${(Array.isArray(filters[key]) ? filters[key] : []).slice().sort().join('|')}`)
+        .join(';');
+    }
+
+    function resetTablePage() {
+      state.tablePage = 1;
+    }
+
+    function matchesTableFilters(row) {
+      const filters = state.tableFilters || {};
+      return Object.keys(filters).every((header) => {
+        const selected = Array.isArray(filters[header]) ? filters[header] : [];
+        if (!selected.length) return true;
+        const value = String(row && row.record ? row.record[header] || '' : '');
+        return selected.includes(value);
+      });
+    }
+
+    function getStatusOptions() {
+      if (!state.tableData) return [];
+      const statusHeader = state.tableData.headers.find((header) => /status|stage/i.test(header));
+      if (!statusHeader) return [];
+      return [...new Set(state.tableData.rows.map((row) => row.record[statusHeader]).filter(Boolean))].sort();
+    }
+
+    function applyUserAppConfig() {
+      const app = getAppConfig();
+      const root = document.documentElement;
+      if (app.accentColor) {
+        root.style.setProperty('--walnut-700', app.accentColor);
+        root.style.setProperty('--gold-500', app.accentColor);
+        root.style.setProperty('--app-accent', app.accentColor);
+      }
+      if (app.defaultTableView) state.tableViewMode = ['detail', 'card'].includes(app.defaultTableView) ? app.defaultTableView : 'table';
+    }
+
+    function getUiConfig() {
+      return state.uiConfig || (state.bootstrap && state.bootstrap.uiConfig) || {};
+    }
+
+    function getAppConfig() {
+      return getUiConfig().app || {};
+    }
+
+    function getProcessName() {
+      const projectName = state.bootstrap && state.bootstrap.projectInfo ? state.bootstrap.projectInfo.processName : '';
+      const appName = getAppConfig().appName || '';
+      if (projectName && normalizeClientNavText(projectName) !== 'process app') return projectName;
+      return appName || projectName || 'Process App';
+    }
+
+    function syncDocumentTitle() {
+      const title = getProcessName();
+      if (title) document.title = title;
+    }
+
+    function getBrandLogoUrl() {
+      return getAppConfig().logoUrl
+        || (state.bootstrap && state.bootstrap.projectInfo && state.bootstrap.projectInfo.logoUrl)
+        || 'https://ik.imagekit.io/tdkhoi/Logo-Brand-Guideline/Logo-default.png?updatedAt=1778140100369';
+    }
+
+    function getDefaultLandingPageKey() {
+      return String(getAppConfig().defaultLandingPage || '').trim();
+    }
+
+    function getPageConfigForActiveTable() {
+      return getPageConfigForTableKey(state.activeTableKey, state.activeStep && state.activeStep.pageId);
+    }
+
+    function getPageConfigForTableKey(tableKey, pageId) {
+      const config = getUiConfig().pages || {};
+      const byId = config.byId || {};
+      const byTableKey = config.byTableKey || {};
+      return (pageId && byId[pageId])
+        || byTableKey[tableKey]
+        || null;
+    }
+
+    function getActiveAiInsightConfig(headers = []) {
+      const pageConfig = getPageConfigForActiveTable();
+      if (!pageConfig || !pageConfig.aiInsightEnabled) {
+        return {
+          enabled: false,
+          pageConfig: pageConfig || null,
+          focusHeader: '',
+          configuredColumn: '',
+        };
+      }
+      const data = getEditingTableData ? getEditingTableData() : state.tableData;
+      const effectiveHeaders = Array.isArray(headers) && headers.length
+        ? headers
+        : data && Array.isArray(data.headers)
+        ? data.headers
+        : [];
+      const configuredColumn = String(pageConfig.aiInsightColumn || '').trim();
+      const focusHeader = configuredColumn ? resolveConfiguredHeader(configuredColumn, effectiveHeaders) : '';
+      return {
+        enabled: true,
+        pageConfig,
+        configuredColumn,
+        focusHeader,
+        focusLabel: getFieldLabel(focusHeader || configuredColumn || ''),
+      };
+    }
+
+    function getCurrentAiInsightViewRow() {
+      const rows = filteredRows();
+      if (!rows.length) return null;
+      if (state.tableViewMode === 'detail') return getSelectedDetailRow(rows);
+      if (state.detailRowNumber != null) {
+        return rows.find((row) => Number(row.rowNumber) === Number(state.detailRowNumber)) || rows[0];
+      }
+      return rows[0];
+    }
+
+    function getAiInsightRecordTitle(record, headers) {
+      const headerList = Array.isArray(headers) ? headers : [];
+      if (!record || !headerList.length) return 'Record';
+      const titleHeader = getTitleColumnHeader(headerList) || headerList[0] || '';
+      return String((titleHeader && record[titleHeader]) || 'Record').trim() || 'Record';
+    }
+
+    function formatAiInsightRecordLines(record, headers) {
+      const headerList = Array.isArray(headers) ? headers.filter(Boolean) : [];
+      return headerList
+        .map((header) => {
+          const label = getFieldLabel(header);
+          const value = record && record[header] != null && String(record[header]).trim() !== ''
+            ? String(record[header]).trim()
+            : '-';
+          return `- ${label}: ${value}`;
+        })
+        .join('\n');
+    }
+
+    function buildAiInsightPrompt(record, options = {}) {
+      const data = options.data || (typeof getEditingTableData === 'function' ? getEditingTableData() : state.tableData) || {};
+      const headers = Array.isArray(options.headers) && options.headers.length
+        ? options.headers
+        : Array.isArray(data.headers) && data.headers.length
+        ? data.headers
+        : Object.keys(record || {});
+      const insightConfig = options.insightConfig || getActiveAiInsightConfig(headers);
+      const title = options.title || getAiInsightRecordTitle(record, headers);
+      const pageLabel = options.pageLabel || (insightConfig.pageConfig && insightConfig.pageConfig.label) || '';
+      const focusHeader = insightConfig.focusHeader || '';
+      const focusLabel = insightConfig.focusLabel || getFieldLabel(focusHeader || insightConfig.configuredColumn || '');
+      const focusValue = focusHeader && record && record[focusHeader] != null ? String(record[focusHeader]).trim() : '';
+      const intro = focusHeader
+        ? `Bạn là trợ lý phân tích nghiệp vụ cho ứng dụng nội bộ. Hãy đọc record dưới đây và đưa AI insight bằng tiếng Việt. Tập trung trước vào trường "${focusLabel}"${focusValue ? ` với giá trị "${focusValue}"` : ''}, sau đó dùng toàn bộ record để: (1) tóm tắt ngắn gọn, (2) chỉ ra điểm đáng chú ý hoặc rủi ro, (3) đề xuất các bước tiếp theo thực tế.`
+        : 'Bạn là trợ lý phân tích nghiệp vụ cho ứng dụng nội bộ. Hãy đọc record dưới đây và đưa AI insight tổng quan bằng tiếng Việt: (1) tóm tắt nhanh record hiện tại, (2) nêu các điểm đáng chú ý hoặc bất thường, (3) gợi ý các bước tiếp theo hoặc câu hỏi cần làm rõ.';
+      const context = [
+        pageLabel ? `Trang: ${pageLabel}` : '',
+        title ? `Record: ${title}` : '',
+        data && data.table && data.table.name ? `Bảng: ${data.table.name}` : '',
+      ].filter(Boolean).join('\n');
+      return [
+        intro,
+        context,
+        'Dữ liệu record:',
+        formatAiInsightRecordLines(record || {}, headers),
+      ].filter(Boolean).join('\n\n');
+    }
+
+    function getAiInsightCopyText(record, options = {}) {
+      const data = options.data || (typeof getEditingTableData === 'function' ? getEditingTableData() : state.tableData) || {};
+      const headers = Array.isArray(options.headers) && options.headers.length
+        ? options.headers
+        : Array.isArray(data.headers) && data.headers.length
+        ? data.headers
+        : Object.keys(record || {});
+      const insightConfig = options.insightConfig || getActiveAiInsightConfig(headers);
+      const focusHeader = insightConfig.focusHeader || '';
+      const focusValue = focusHeader && record && record[focusHeader] != null ? String(record[focusHeader]).trim() : '';
+      if (focusValue) return focusValue;
+      return buildAiInsightPrompt(record, Object.assign({}, options, { data, headers, insightConfig }));
+    }
+
+    async function copyTextToClipboard(text) {
+      const value = String(text || '');
+      if (!value) return false;
+      try {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(value);
+          return true;
+        }
+      } catch (error) {}
+      try {
+        const area = document.createElement('textarea');
+        area.value = value;
+        area.setAttribute('readonly', '');
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        area.style.pointerEvents = 'none';
+        document.body.appendChild(area);
+        area.focus();
+        area.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(area);
+        return !!ok;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function getViewsForActiveTable() {
+      const config = getUiConfig().views || {};
+      const byPageId = config.byPageId || {};
+      const byTableKey = config.byTableKey || {};
+      const pageViews = state.activeStep && state.activeStep.pageId ? byPageId[state.activeStep.pageId] || [] : [];
+      const tableViews = byTableKey[state.activeTableKey] || [];
+      return mergeActiveViewConfigs(tableViews, pageViews);
+    }
+
+    function mergeActiveViewConfigs(tableViews, pageViews) {
+      const byType = {};
+      const order = [];
+      const remember = (type) => {
+        if (type && !order.includes(type)) order.push(type);
+      };
+      (tableViews || []).forEach((view) => {
+        if (!view || !view.type) return;
+        byType[view.type] = mergeViewConfigValues(byType[view.type] || {}, view);
+        remember(view.type);
+      });
+      (pageViews || []).forEach((view) => {
+        if (!view || !view.type) return;
+        const base = byType[view.type] || {};
+        byType[view.type] = mergeViewConfigValues(base, view);
+        remember(view.type);
+      });
+      return order.map((type) => byType[type]).filter(Boolean).sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0));
+    }
+
+    function mergeViewConfigValues(base, override) {
+      const merged = Object.assign({}, base, override);
+      ['displayNameColumn', 'displayName', 'displayField', 'titleField'].forEach((key) => {
+        if (!override[key] && base[key]) merged[key] = base[key];
+      });
+      ['defaultGroupBy', 'columnOrder', 'hiddenColumns', 'sections', 'filterFields', 'defaultFilters'].forEach((key) => {
+        if ((!override[key] || !override[key].length) && base[key] && base[key].length) merged[key] = base[key];
+      });
+      if (!override.defaultSort && base.defaultSort) merged.defaultSort = base.defaultSort;
+      return merged;
+    }
+
+    function getDefaultViewForItem(item) {
+      if (!item || !item.tableKey) return getAppConfig().defaultTableView || 'table';
+      const pageConfig = getUiConfig().pages || {};
+      const viewConfig = getUiConfig().views || {};
+      const page = (item.pageId && (pageConfig.byId || {})[item.pageId]) || ((pageConfig.byTableKey || {})[item.tableKey]) || null;
+      const views = (item.pageId && (viewConfig.byPageId || {})[item.pageId]) || ((viewConfig.byTableKey || {})[item.tableKey]) || [];
+      const view = (page && page.viewType) || getAppConfig().defaultTableView || 'table';
+      return ['detail', 'card'].includes(view) ? view : 'table';
+    }
+
+    function getActiveViewConfig() {
+      const views = getViewsForActiveTable();
+      return views.find((view) => view.type === state.tableViewMode)
+        || null;
+    }
+
+    function applyDefaultFiltersForActiveView() {
+      state.tableFilters = getDefaultFiltersForActiveView();
+      state.filterSearchQuery = '';
+      state.expandedFilterGroups = {};
+      state.filterMenuOpen = false;
+      resetTablePage();
+    }
+
+    function applyDefaultSortForActiveView() {
+      state.sort = getDefaultSortForActiveView();
+      resetTablePage();
+    }
+
+    function markDefaultGroupsForInitialCollapse(groupFields) {
+      const fields = (groupFields || []).filter(Boolean);
+      state.defaultGroupCollapsePending = fields.length > 0;
+      state.defaultGroupCollapseSignature = '';
+    }
+
+    function clearDefaultGroupInitialCollapse() {
+      state.defaultGroupCollapsePending = false;
+      state.defaultGroupCollapseSignature = '';
+    }
+
+    function getDefaultSortForActiveView() {
+      const view = getActiveViewConfig();
+      const defaultSort = view && view.defaultSort ? view.defaultSort : null;
+      const headers = state.tableData && Array.isArray(state.tableData.headers) ? state.tableData.headers : [];
+      if (!defaultSort || !headers.length) return { header: '', direction: 1 };
+      const header = resolveConfiguredHeader(defaultSort.field || defaultSort.fieldKey, headers);
+      return header ? { header, direction: Number(defaultSort.direction || 1) < 0 ? -1 : 1 } : { header: '', direction: 1 };
+    }
+
+    function getDefaultFiltersForActiveView() {
+      const view = getActiveViewConfig();
+      const defaults = view && Array.isArray(view.defaultFilters) ? view.defaultFilters : [];
+      const headers = state.tableData && Array.isArray(state.tableData.headers) ? state.tableData.headers : [];
+      if (!defaults.length || !headers.length) return {};
+
+      return defaults.reduce((acc, filter) => {
+        const header = resolveConfiguredHeader(filter.field || filter.fieldKey, headers);
+        const values = (filter.values || []).map((value) => String(value || '').trim()).filter(Boolean);
+        if (header && values.length) acc[header] = Array.from(new Set(values));
+        return acc;
+      }, {});
+    }
+
+    function getConfiguredFilterHeaders(headers) {
+      const view = getActiveViewConfig();
+      if (!view) return [];
+      const configured = []
+        .concat(view.filterFields || [])
+        .concat((view.defaultFilters || []).map((filter) => filter.field || filter.fieldKey));
+      return Array.from(new Set(configured
+        .map((field) => resolveConfiguredHeader(field, headers || []))
+        .filter(Boolean)));
+    }
+
+    function resolveConfiguredHeader(field, headers) {
+      const normalized = normalizeClientConfigKey(field);
+      if (!normalized) return '';
+      const fields = normalizeFormFields(state.tableData ? state.tableData.fields || [] : []);
+      const byKey = {};
+      (headers || []).forEach((header) => {
+        byKey[normalizeClientConfigKey(header)] = header;
+      });
+      fields.forEach((item) => {
+        if (!item || !item.name) return;
+        byKey[normalizeClientConfigKey(item.name)] = item.name;
+        if (item.label) byKey[normalizeClientConfigKey(item.label)] = item.name;
+      });
+      return byKey[normalized] || '';
+    }
+
+    function getActiveFormConfig(defaults = {}, mode = '') {
+      const formConfig = getUiConfig().forms || {};
+      const byPageId = formConfig.byPageId || {};
+      const byViewId = formConfig.byViewId || {};
+      const activeView = getActiveViewConfig();
+      const rawModeKey = normalizeClientConfigKey(mode);
+      const modeKey = rawModeKey === 'nested' || rawModeKey === 'related' || rawModeKey === 'subform'
+        ? 'nested'
+        : rawModeKey === 'full' || rawModeKey === 'advanced'
+        ? 'full'
+        : 'quick';
+      const pageForms = state.activeStep && state.activeStep.pageId ? byPageId[state.activeStep.pageId] : null;
+      const form = (pageForms && (pageForms[modeKey] || pageForms.quick || pageForms.full))
+        || (activeView && activeView.id ? byViewId[activeView.id] : null)
+        || null;
+      const merged = Object.assign({}, {
+        columns: modeKey === 'full' || modeKey === 'nested' ? 2 : 1,
+        labelPosition: 'top',
+        showEmptyFields: true,
+      }, defaults || {}, form || {});
+      if (!merged.nestedTablesExplicit || !Array.isArray(merged.nestedTables)) merged.nestedTables = [];
+      return merged;
+    }
+
+    function applyFormFieldOrder(fields, formConfig) {
+      const form = formConfig || getActiveFormConfig();
+      if (!form) return fields;
+      const hidden = new Set((form.hiddenColumns || []).map(normalizeClientConfigKey));
+      const explicitOrder = (form.columnOrder || []).map(normalizeClientConfigKey).filter(Boolean);
+      const order = explicitOrder;
+      const byKey = fields.reduce((acc, field) => {
+        acc[normalizeClientConfigKey(field.name)] = field;
+        acc[normalizeClientConfigKey(field.label)] = field;
+        return acc;
+      }, {});
+      const used = {};
+      const ordered = order
+        .map((key) => byKey[key] || null)
+        .filter((field) => {
+          if (!field) return false;
+          const fieldKey = normalizeClientConfigKey(field.name);
+          if (used[fieldKey]) return false;
+          used[fieldKey] = true;
+          return true;
+        });
+      const rest = fields.filter((field) => !used[normalizeClientConfigKey(field.name)]);
+      return ordered.concat(rest).map((field) => Object.assign({}, field, {
+        hidden: field.hidden
+          || hidden.has(normalizeClientConfigKey(field.name))
+          || hidden.has(normalizeClientConfigKey(field.label)),
+      }));
+    }
+
+    function getConfiguredSectionFieldKeys(sections) {
+      return (Array.isArray(sections) ? sections : [])
+        .reduce((acc, section) => acc.concat(Array.isArray(section && section.fields) ? section.fields : []), [])
+        .map(normalizeClientConfigKey)
+        .filter(Boolean);
+    }
+
+    function findBootstrapTableByName(name) {
+      if (!name || !state.bootstrap || !state.bootstrap.tables) return null;
+      const normalized = normalizeClientConfigKey(name);
+      const tables = state.bootstrap.tables || {};
+      return Object.keys(tables).reduce((found, key) => {
+        if (found) return found;
+        const table = tables[key] || {};
+        const candidates = [key, table.name, table.apiTableName, table.sheetName]
+          .filter(Boolean)
+          .map(normalizeClientConfigKey);
+        return candidates.includes(normalized) ? Object.assign({ key }, table) : null;
+      }, null);
+    }
+
+    function getRelationshipForNestedTable(nestedTableName) {
+      if (!state.activeTableKey || !nestedTableName) return null;
+      const nestedTable = findBootstrapTableByName(nestedTableName);
+      if (!nestedTable || !nestedTable.key) return null;
+      const relationships = (getUiConfig().relationships || {}).byPair || {};
+      const pair = relationships[`${state.activeTableKey}::${nestedTable.key}`] || [];
+      if (pair[0]) return pair[0];
+      const reversePair = relationships[`${nestedTable.key}::${state.activeTableKey}`] || [];
+      const reverse = reversePair[0];
+      if (!reverse) return null;
+      return Object.assign({}, reverse, {
+        sourceTableKey: state.activeTableKey,
+        sourceTable: reverse.targetTable,
+        sourceField: reverse.targetField,
+        targetTableKey: nestedTable.key,
+        targetTable: reverse.sourceTable,
+        targetField: reverse.sourceField,
+      });
+    }
+
+    function filterRowsByRelationship(rows, relationship, parentRecord) {
+      if (!relationship || !parentRecord) return [];
+      const parentValue = parentRecord[relationship.sourceField];
+      if (parentValue === '' || parentValue == null) return [];
+      return (rows || []).filter((row) => String((row.record || {})[relationship.targetField] || '') === String(parentValue));
+    }
+
+    function getDefaultGroupFieldsForActiveTable() {
+      const fields = getVisibleFields().filter((field) => field.groupable !== false);
+      if (!fields.length) return [];
+
+      const page = getPageConfigForActiveTable();
+      const view = getActiveViewConfig();
+      const configured = view && view.defaultGroupBy && view.defaultGroupBy.length
+        ? view.defaultGroupBy
+        : page && page.defaultGroupBy && page.defaultGroupBy.length
+        ? page.defaultGroupBy
+        : [];
+      if (configured.length) return mapConfiguredGroupFields(configured, fields);
+
+      return fields
+        .filter((field) => field.defaultGroup)
+        .sort((left, right) => Number(left.groupOrder || left.sortOrder || left.index || 0) - Number(right.groupOrder || right.sortOrder || right.index || 0))
+        .map((field) => field.name);
+    }
+
+    function mapConfiguredGroupFields(configured, fields) {
+      const byKey = fields.reduce((acc, field) => {
+        acc[normalizeClientConfigKey(field.name)] = field.name;
+        acc[normalizeClientConfigKey(field.label)] = field.name;
+        return acc;
+      }, {});
+      return configured
+        .map((name) => byKey[normalizeClientConfigKey(name)] || '')
+        .filter(Boolean);
+    }
+
+    function getVisibleFields() {
+      if (!state.tableData) return [];
+      const fields = normalizeFormFields(state.tableData.fields || state.tableData.headers);
+      return applyActiveViewFieldOrder(fields).filter((field) => !field.hidden);
+    }
+
+    function applyActiveViewFieldOrder(fields) {
+      const view = getActiveViewConfig();
+      if (!view) return fields;
+      const hidden = new Set((view.hiddenColumns || []).map(normalizeClientConfigKey));
+      const explicitOrder = (view.columnOrder || []).map(normalizeClientConfigKey).filter(Boolean);
+      const sectionOrder = getConfiguredSectionFieldKeys(view.sections);
+      const useSectionSelection = !explicitOrder.length && Array.isArray(view.sections) && view.sections.length > 0;
+      const sectionKeys = new Set(sectionOrder);
+      const order = explicitOrder.length ? explicitOrder : sectionOrder;
+      const byKey = fields.reduce((acc, field) => {
+        acc[normalizeClientConfigKey(field.name)] = field;
+        acc[normalizeClientConfigKey(field.label)] = field;
+        return acc;
+      }, {});
+      const used = {};
+      const ordered = order
+        .map((key) => byKey[key] || null)
+        .filter((field) => {
+          if (!field) return false;
+          const fieldKey = normalizeClientConfigKey(field.name);
+          if (used[fieldKey]) return false;
+          used[fieldKey] = true;
+          return true;
+        });
+      const rest = useSectionSelection ? [] : fields.filter((field) => !used[normalizeClientConfigKey(field.name)]);
+      return ordered.concat(rest).map((field) => Object.assign({}, field, {
+        hidden: field.hidden
+          || hidden.has(normalizeClientConfigKey(field.name))
+          || hidden.has(normalizeClientConfigKey(field.label))
+          || (useSectionSelection && !sectionKeys.has(normalizeClientConfigKey(field.name)) && !sectionKeys.has(normalizeClientConfigKey(field.label))),
+      }));
+    }
+
+    function getVisibleHeaders() {
+      return getVisibleFields().map((field) => field.name);
+    }
+
+    function getFieldLabel(header) {
+      const fields = normalizeFormFields(state.tableData ? state.tableData.fields || [] : []);
+      const field = fields.find((candidate) => candidate.name === header);
+      return (field && field.label) || header;
+    }
+
+    function isComponentEnabled(type, defaultValue = true) {
+      const normalized = normalizeClientConfigKey(type);
+      const app = getAppConfig();
+      const appSwitches = {
+        search: app.showSearch,
+        status_filter: app.showStatusFilter,
+        grouping: app.enableGrouping,
+        new_row: app.enableCreate,
+        create: app.enableCreate,
+        edit: app.enableEdit,
+        delete: app.enableDelete,
+        import: app.enableImport,
+        open_sheet: app.showOpenSheet,
+        view_switcher: app.showViewSwitcher,
+      };
+      if (Object.prototype.hasOwnProperty.call(appSwitches, normalized) && appSwitches[normalized] === false) return false;
+
+      const components = getUiConfig().components || {};
+      const activeView = getActiveViewConfig();
+      const component = (activeView && activeView.id && components.byViewId && components.byViewId[activeView.id]
+          ? components.byViewId[activeView.id][normalized]
+          : null)
+        || (state.tableViewMode && components.byViewType && components.byViewType[state.tableViewMode]
+          ? components.byViewType[state.tableViewMode][normalized]
+          : null)
+        || ((components.byType || {})[normalized]);
+      return component ? component.enabled !== false : defaultValue;
+    }
+
+    function getDataServiceForTable(tableKey) {
+      return (((getUiConfig().dataServices || {}).byTableKey || {})[tableKey || state.activeTableKey]) || {};
+    }
+
+    function getDataServiceForActiveTable() {
+      return getDataServiceForTable(state.activeTableKey);
+    }
+
+    function canCreateRows(tableKey) {
+      const service = getDataServiceForTable(tableKey || state.activeTableKey);
+      return isComponentEnabled('new_row', true) && service.enableCreate !== false;
+    }
+
+    function canEditRows(tableKey) {
+      const service = getDataServiceForTable(tableKey || state.activeTableKey);
+      return isComponentEnabled('edit', true) && service.enableEdit !== false;
+    }
+
+    function canDeleteRows(tableKey) {
+      const service = getDataServiceForTable(tableKey || state.activeTableKey);
+      return isComponentEnabled('delete', true) && service.enableDelete !== false;
+    }
+
+    function canImportRows() {
+      const service = getDataServiceForActiveTable();
+      return isComponentEnabled('import', true) && service.enableImport !== false;
+    }
+
+    function canSaveRecord(rowNumber, tableKey) {
+      return isComponentEnabled('save', true) && (rowNumber ? canEditRows(tableKey) : canCreateRows(tableKey));
+    }
+
+    function normalizeClientConfigKey(value) {
+      return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    }
+
+    function makeClientSummary(headers, rows) {
+      const statusHeader = headers.find((header) => /status|stage/i.test(header));
+      const ownerHeader = headers.find((header) => /owner|team|department|position|channel/i.test(header));
+      const statusCounts = {};
+      const ownerCounts = {};
+      rows.forEach((row) => {
+        if (statusHeader) statusCounts[row.record[statusHeader] || 'Blank'] = (statusCounts[row.record[statusHeader] || 'Blank'] || 0) + 1;
+        if (ownerHeader) ownerCounts[row.record[ownerHeader] || 'Blank'] = (ownerCounts[row.record[ownerHeader] || 'Blank'] || 0) + 1;
+      });
+      return { rows: rows.length, columns: headers.length, statusCounts, ownerCounts };
+    }
+
+    function statusPill(value) {
+      const normalized = String(value || '').toLowerCase();
+      let tone = '';
+      if (/approved|selected|published|ready|done|active/.test(normalized)) tone = 'good';
+      if (/pending|brief|draft|progress|scheduled|new|shortlisted/.test(normalized)) tone = 'warn';
+      if (/reject|failed|closed|inactive/.test(normalized)) tone = 'danger';
+      return `<span class="pill ${tone}">${escapeHtml(value || 'Blank')}</span>`;
+    }
+
+    function findFirstStep(items) {
+      for (const item of items) {
+        if (item.tableKey || item.overviewKey || item.linkUrl) return item;
+        const found = item.children && findFirstStep(item.children);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    function findFirstTableStep(items) {
+      for (const item of items || []) {
+        if (item.tableKey) return item;
+        const found = item.children && findFirstTableStep(item.children);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    function findDefaultLandingStep(items) {
+      const configured = getDefaultLandingPageKey();
+      const configuredStep = configured ? findStepByLandingKey(items, configured) : null;
+      return configuredStep || findFirstTableStep(items) || findFirstStep(items);
+    }
+
+    function findStepByLandingKey(items, key) {
+      const normalized = normalizeClientNavText(key);
+      if (!normalized) return null;
+      for (const item of items || []) {
+        if (isLandingStepMatch(item, normalized) && (item.tableKey || item.overviewKey || item.linkUrl)) return item;
+        const found = item.children && findStepByLandingKey(item.children, key);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    function isLandingStepMatch(item, normalizedKey) {
+      return [item.id, item.pageId, item.tableKey, item.overviewKey, item.label]
+        .filter(Boolean)
+        .some((value) => normalizeClientNavText(value) === normalizedKey);
+    }
+
+    function expandNavToStep(items, target) {
+      if (!target || !target.id) return false;
+      return expandNavToStepId(items, target.id);
+    }
+
+    function expandNavToStepId(items, targetId) {
+      for (const item of items || []) {
+        const id = getNavNodeId(item);
+        if (item.id === targetId) {
+          if (id) state.collapsedNav[id] = false;
+          return true;
+        }
+        if (item.children && expandNavToStepId(item.children, targetId)) {
+          if (id) state.collapsedNav[id] = false;
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function findStepById(items, id, trail = []) {
+      for (const item of items) {
+        const nextTrail = [...trail, item.label];
+        if (item.id === id) return { step: item, trail: nextTrail };
+        const found = item.children && findStepById(item.children, id, nextTrail);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    function getStepPath(id) {
+      if (!id || !state.bootstrap) return [];
+      const found = findStepById(state.bootstrap.navigation, id);
+      return found ? found.trail : [];
+    }
+
+    function columnName(index) {
+      let value = Number(index) || 1;
+      let name = '';
+      while (value > 0) {
+        const remainder = (value - 1) % 26;
+        name = String.fromCharCode(65 + remainder) + name;
+        value = Math.floor((value - 1) / 26);
+      }
+      return name;
+    }
+
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value).replace(/`/g, '&#096;');
+    }
+
+    function setLoading(loading, message) {
+      document.body.classList.toggle('loading', loading);
+      document.body.toggleAttribute('aria-busy', !!loading);
+      syncPageLoader(loading || state.routeLoading, message || document.body.dataset.loadingMessage || 'Loading');
+    }
+
+    function syncPageLoader(loading, message) {
+      if (!el.pageLoader) return;
+      const text = translateUiText(message || 'Loading', state.language);
+      el.pageLoader.classList.toggle('show', !!loading);
+      el.pageLoader.setAttribute('aria-hidden', loading ? 'false' : 'true');
+      const label = el.pageLoader.querySelector('strong');
+      if (label) label.textContent = text;
+      if (loading) document.body.dataset.loadingMessage = text;
+      else delete document.body.dataset.loadingMessage;
+    }
+
+    function showToast(message) {
+      const text = translateUiText(String(message || '').trim(), state.language);
+      if (!text) return;
+      el.toast.textContent = text;
+      el.toast.classList.add('show');
+      window.clearTimeout(state.toastTimer);
+      state.toastTimer = window.setTimeout(() => {
+        el.toast.classList.remove('show');
+        window.setTimeout(() => {
+          if (!el.toast.classList.contains('show')) el.toast.textContent = '';
+        }, 220);
+      }, 2200);
+    }
+
+    function showError(error) {
+      console.error(error);
+      showToast(formatClientErrorMessage(error));
+    }
+
+    const UI_LANGUAGES = {
+      default: { code: 'A', label: 'Default', htmlLang: 'vi' },
+      vi: { code: 'VI', label: 'Tiếng Việt', htmlLang: 'vi' },
+      en: { code: 'EN', label: 'English', htmlLang: 'en' },
+      zh: { code: '中', label: '中文', htmlLang: 'zh-CN' },
+    };
+
+    const UI_TRANSLATIONS = {
+      'loading': { vi: 'Đang tải', en: 'Loading', zh: '加载中' },
+      'loading app': { vi: 'Đang tải app', en: 'Loading app', zh: '正在加载应用' },
+      'loading config registry': { vi: 'Đang tải cấu hình', en: 'Loading config registry', zh: '正在加载配置' },
+      'loading config': { vi: 'Đang tải cấu hình', en: 'Loading config', zh: '正在加载配置' },
+      'preparing setting tables and permissions.': { vi: 'Đang chuẩn bị bảng setting và quyền truy cập.', en: 'Preparing setting tables and permissions.', zh: '正在准备设置表和权限。' },
+      'user app': { vi: 'App người dùng', en: 'User app', zh: '用户应用' },
+      'config app': { vi: 'App cấu hình', en: 'Config app', zh: '配置应用' },
+      'language': { vi: 'Ngôn ngữ', en: 'Language', zh: '语言' },
+      'change language': { vi: 'Đổi ngôn ngữ', en: 'Change language', zh: '切换语言' },
+      'default': { vi: 'Mặc định', en: 'Default', zh: '默认' },
+      'switch to user app': { vi: 'Chuyển sang app người dùng', en: 'Switch to User app', zh: '切换到用户应用' },
+      'switch to config app': { vi: 'Chuyển sang app cấu hình', en: 'Switch to Config app', zh: '切换到配置应用' },
+      'overview': { vi: 'Tổng quan', en: 'Overview', zh: '总览' },
+      'operation': { vi: 'Vận hành', en: 'Operation', zh: '运营' },
+      'group': { vi: 'Nhóm', en: 'Group', zh: '分组' },
+      'step': { vi: 'Bước', en: 'Step', zh: '步骤' },
+      'business setting': { vi: 'Thiết lập nghiệp vụ', en: 'Business setting', zh: '业务设置' },
+      'app setting': { vi: 'Thiết lập app', en: 'App setting', zh: '应用设置' },
+      'general': { vi: 'Chung', en: 'General', zh: '通用' },
+      'report': { vi: 'Báo cáo', en: 'Report', zh: '报表' },
+      'page': { vi: 'Trang', en: 'Page', zh: '页面' },
+      'view': { vi: 'Giao diện', en: 'View', zh: '视图' },
+      'form': { vi: 'Biểu mẫu', en: 'Form', zh: '表单' },
+      'component': { vi: 'Thành phần', en: 'Component', zh: '组件' },
+      'navigation': { vi: 'Điều hướng', en: 'Navigation', zh: '导航' },
+      'app config': { vi: 'Cấu hình app', en: 'App config', zh: '应用配置' },
+      'table index': { vi: 'Danh mục bảng', en: 'Table index', zh: '表索引' },
+      'data column': { vi: 'Cột dữ liệu', en: 'Data column', zh: '数据列' },
+      'relationship': { vi: 'Quan hệ', en: 'Relationship', zh: '关系' },
+      'data services': { vi: 'Dịch vụ dữ liệu', en: 'Data services', zh: '数据服务' },
+      'template table': { vi: 'Bảng mẫu', en: 'Template table', zh: '模板表' },
+      'native table': { vi: 'Bảng native', en: 'Native table', zh: '原生表' },
+      'supplier': { vi: 'Nhà cung cấp', en: 'Supplier', zh: '供应商' },
+      'supplier x item': { vi: 'Nhà cung cấp x hạng mục', en: 'Supplier x item', zh: '供应商 x 项目' },
+      'supplier x item category': { vi: 'Nhà cung cấp x nhóm hạng mục', en: 'Supplier x item category', zh: '供应商 x 项目类别' },
+      'supplier x item category id': { vi: 'ID nhà cung cấp x nhóm hạng mục', en: 'Supplier x item category ID', zh: '供应商 x 项目类别 ID' },
+      'item category': { vi: 'Nhóm hạng mục', en: 'Item category', zh: '项目类别' },
+      'capability scope': { vi: 'Phạm vi năng lực', en: 'Capability scope', zh: '能力范围' },
+      'moq': { vi: 'MOQ', en: 'MOQ', zh: '最小起订量' },
+      'lead time days': { vi: 'Thời gian giao hàng (ngày)', en: 'Lead time days', zh: '交期天数' },
+      'gỗ': { vi: 'Gỗ', en: 'Wood', zh: '木材' },
+      'phụ kiện': { vi: 'Phụ kiện', en: 'Accessories', zh: '配件' },
+      'phụ liệu': { vi: 'Phụ liệu', en: 'Auxiliary materials', zh: '辅料' },
+      'vật tư': { vi: 'Vật tư', en: 'Materials', zh: '物料' },
+      'nội thất': { vi: 'Nội thất', en: 'Furniture', zh: '家具' },
+      'sơn': { vi: 'Sơn', en: 'Paint', zh: '涂料' },
+      'keo sơn': { vi: 'Keo sơn', en: 'Paint adhesive', zh: '涂料胶' },
+      'search records': { vi: 'Tìm bản ghi', en: 'Search records', zh: '搜索记录' },
+      'all status': { vi: 'Tất cả trạng thái', en: 'All status', zh: '所有状态' },
+      'selected record': { vi: 'Bản ghi đang chọn', en: 'Selected record', zh: '选中记录' },
+      'drag a column header here to group': { vi: 'Kéo tiêu đề cột vào đây để nhóm', en: 'Drag a column header here to group', zh: '拖动列标题到这里进行分组' },
+      'fields': { vi: 'trường', en: 'fields', zh: '字段' },
+      'visible': { vi: 'hiển thị', en: 'visible', zh: '可见' },
+      'statuses': { vi: 'trạng thái', en: 'statuses', zh: '状态' },
+      'records': { vi: 'bản ghi', en: 'records', zh: '记录' },
+      'tables connected': { vi: 'bảng đã kết nối', en: 'tables connected', zh: '个表已连接' },
+      'new': { vi: 'Mới', en: 'New', zh: '新建' },
+      'edit': { vi: 'Sửa', en: 'Edit', zh: '编辑' },
+      'save': { vi: 'Lưu', en: 'Save', zh: '保存' },
+      'delete': { vi: 'Xóa', en: 'Delete', zh: '删除' },
+      'delete record': { vi: 'Xóa bản ghi', en: 'Delete record', zh: '删除记录' },
+      'click delete again to confirm': { vi: 'Bấm xóa lần nữa để xác nhận', en: 'Click delete again to confirm', zh: '再次点击删除以确认' },
+      'delete is disabled by app config': { vi: 'Config app đang tắt quyền xóa', en: 'Delete is disabled by app config', zh: '应用配置已禁用删除' },
+      'record cleared from data range': { vi: 'Đã xóa bản ghi khỏi vùng dữ liệu', en: 'Record cleared from data range', zh: '记录已从数据区域清除' },
+      'cancel': { vi: 'Hủy', en: 'Cancel', zh: '取消' },
+      'clear': { vi: 'Xóa lọc', en: 'Clear', zh: '清除' },
+      'import': { vi: 'Nhập', en: 'Import', zh: '导入' },
+      'import csv': { vi: 'Nhập CSV', en: 'Import CSV', zh: '导入 CSV' },
+      'choose csv': { vi: 'Chọn CSV', en: 'Choose CSV', zh: '选择 CSV' },
+      'import rows': { vi: 'Nhập dòng', en: 'Import rows', zh: '导入行' },
+      'template': { vi: 'Mẫu', en: 'Template', zh: '模板' },
+      'no file selected': { vi: 'Chưa chọn file', en: 'No file selected', zh: '未选择文件' },
+      'upload a csv using the current table headers. download the template if you need the right columns.': {
+        vi: 'Upload CSV theo header hiện tại. Tải template nếu cần đúng cột.',
+        en: 'Upload a CSV using the current table headers. Download the template if you need the right columns.',
+        zh: '按当前表头上传 CSV。如需正确列，可下载模板。'
+      },
+      'category': { vi: 'Danh mục', en: 'Category', zh: '类别' },
+      'sub category': { vi: 'Danh mục con', en: 'Sub Category', zh: '子类别' },
+      'key activity': { vi: 'Hoạt động chính', en: 'Key activity', zh: '关键活动' },
+      'attribute type 1': { vi: 'Thuộc tính loại 1', en: 'Attribute type 1', zh: '属性类型 1' },
+      'attribute type 2': { vi: 'Thuộc tính loại 2', en: 'Attribute type 2', zh: '属性类型 2' },
+      'value': { vi: 'Giá trị', en: 'Value', zh: '值' },
+      'note': { vi: 'Ghi chú', en: 'Note', zh: '备注' },
+      'action': { vi: 'Thao tác', en: 'Action', zh: '操作' },
+      'formula': { vi: 'Công thức', en: 'Formula', zh: '公式' },
+      'photo': { vi: 'Ảnh', en: 'Photo', zh: '照片' },
+      'category 1': { vi: 'Danh mục 1', en: 'Category 1', zh: '类别 1' },
+      'category 2': { vi: 'Danh mục 2', en: 'Category 2', zh: '类别 2' },
+      'sub 1': { vi: 'Danh mục con 1', en: 'Sub 1', zh: '子类别 1' },
+      'activity 1': { vi: 'Hoạt động 1', en: 'Activity 1', zh: '活动 1' },
+      'activity 2': { vi: 'Hoạt động 2', en: 'Activity 2', zh: '活动 2' },
+      'attribute': { vi: 'Thuộc tính', en: 'Attribute', zh: '属性' },
+      'sample 1': { vi: 'Mẫu 1', en: 'Sample 1', zh: '样例 1' },
+      'dining table oak': { vi: 'Bàn ăn gỗ sồi', en: 'Dining Table Oak', zh: '橡木餐桌' },
+      'dining chair oak': { vi: 'Ghế ăn gỗ sồi', en: 'Dining Chair Oak', zh: '橡木餐椅' },
+      'main details': { vi: 'Thông tin chính', en: 'Main details', zh: '主要信息' },
+      'identity': { vi: 'Định danh', en: 'Identity', zh: '标识' },
+      'page & data binding': { vi: 'Trang & dữ liệu', en: 'Page & data binding', zh: '页面与数据绑定' },
+      'display': { vi: 'Hiển thị', en: 'Display', zh: '显示' },
+      'columns & sections': { vi: 'Cột & khu vực', en: 'Columns & sections', zh: '列与分区' },
+      'data': { vi: 'Dữ liệu', en: 'Data', zh: '数据' },
+      'service': { vi: 'Dịch vụ', en: 'Service', zh: '服务' },
+      'list': { vi: 'Danh sách', en: 'List', zh: '列表' },
+      'settings': { vi: 'Thiết lập', en: 'Settings', zh: '设置' },
+      'preview': { vi: 'Xem trước', en: 'Preview', zh: '预览' },
+      'nav': { vi: 'Điều hướng', en: 'Nav', zh: '导航' },
+      'open sidebar': { vi: 'Mở sidebar', en: 'Open sidebar', zh: '打开侧边栏' },
+      'close sidebar': { vi: 'Đóng sidebar', en: 'Close sidebar', zh: '关闭侧边栏' },
+      'google sheets is busy. please wait a few seconds and try again.': {
+        vi: 'Google Sheets đang bận. Chờ vài giây rồi thử lại.',
+        en: 'Google Sheets is busy. Please wait a few seconds and try again.',
+        zh: 'Google 表格正忙。请等待几秒后重试。'
+      },
+    };
+
+    const uiOriginalText = new WeakMap();
+
+    function setLanguage(language) {
+      state.language = UI_LANGUAGES[language] ? language : 'default';
+      state.languageMenuOpen = false;
+      try {
+        setStoredPreference('language', state.language);
+        window.localStorage.setItem('processAppLanguage', state.language);
+      } catch (error) {
+        // Language preference is optional.
+      }
+      applyLanguageToPage();
+      renderLanguageControls();
+      showToast(translateUi('Language'));
+    }
+
+    function toggleLanguageMenu(forceOpen) {
+      state.languageMenuOpen = typeof forceOpen === 'boolean' ? forceOpen : !state.languageMenuOpen;
+      renderLanguageControls();
+    }
+
+    function scheduleApplyLanguage() {
+      window.requestAnimationFrame(() => applyLanguageToPage());
+    }
+
+    function applyLanguageToPage(root) {
+      const target = root || document.body;
+      const language = UI_LANGUAGES[state.language] ? state.language : 'default';
+      document.documentElement.lang = UI_LANGUAGES[language].htmlLang;
+      translateTextNodes(target);
+      translateElementAttributes(target);
+      renderLanguageControls();
+    }
+
+    function translateUi(value) {
+      return translateUiText(value, state.language);
+    }
+
+    function translateUiText(value, language) {
+      const raw = String(value == null ? '' : value);
+      const trimmed = raw.trim();
+      if (language === 'default') return raw;
+      if (!trimmed) return raw;
+      const exact = lookupUiTranslation(trimmed, language);
+      if (exact) return raw.replace(trimmed, exact);
+      if (/https?:\/\//i.test(trimmed) || trimmed.includes('://')) return raw;
+
+      const composite = translateCompositeUiText(trimmed, language);
+      if (composite) return raw.replace(trimmed, composite);
+
+      if (trimmed.includes('/')) {
+        const translated = trimmed.split('/').map((part) => translateUiText(part.trim(), language)).join(' / ');
+        return raw.replace(trimmed, translated);
+      }
+
+      const countMatch = trimmed.match(/^(\d+)\s+(.+)$/);
+      if (countMatch) {
+        const unit = lookupUiTranslation(countMatch[2], language);
+        if (unit) return raw.replace(trimmed, `${countMatch[1]} ${unit}`);
+      }
+
+      const connectedMatch = trimmed.match(/^(\d+\/\d+)\s+(.+)$/);
+      if (connectedMatch) {
+        const unit = lookupUiTranslation(connectedMatch[2], language);
+        if (unit) return raw.replace(trimmed, `${connectedMatch[1]} ${unit}`);
+      }
+
+      return raw;
+    }
+
+    function translateCompositeUiText(value, language) {
+      const text = String(value || '');
+      if (!text || /https?:\/\//i.test(text) || text.includes('://')) return '';
+
+      const parts = text.split(/(\s+[-–]\s+|:\s*|_)/);
+      if (parts.length < 3) return '';
+
+      let changed = false;
+      const translated = parts.map((part) => {
+        if (!part || /^(\s+[-–]\s+|:\s*|_)$/.test(part)) return part;
+        const trimmedPart = part.trim();
+        if (!trimmedPart) return part;
+        const next = translateUiText(trimmedPart, language);
+        if (next !== trimmedPart) changed = true;
+        return part.replace(trimmedPart, next);
+      }).join('');
+
+      return changed ? translated : '';
+    }
+
+    function lookupUiTranslation(value, language) {
+      const key = normalizeTranslationKey(value);
+      const entry = UI_TRANSLATIONS[key];
+      return entry && entry[language] ? entry[language] : '';
+    }
+
+    function normalizeTranslationKey(value) {
+      return String(value || '')
+        .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ');
+    }
+
+    function translateTextNodes(root) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          const parent = node.parentElement;
+          if (!parent || isTranslationSkipped(parent)) return NodeFilter.FILTER_REJECT;
+          if (!String(node.nodeValue || '').trim()) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      });
+      const nodes = [];
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+      nodes.forEach((node) => {
+        const original = uiOriginalText.get(node) || node.nodeValue;
+        uiOriginalText.set(node, original);
+        node.nodeValue = translateUiText(original, state.language);
+      });
+    }
+
+    function translateElementAttributes(root) {
+      const elements = root.querySelectorAll ? root.querySelectorAll('[title], [aria-label], [placeholder]') : [];
+      elements.forEach((element) => {
+        if (isTranslationSkipped(element)) return;
+        ['title', 'aria-label', 'placeholder'].forEach((attribute) => {
+          if (!element.hasAttribute(attribute)) return;
+          const sourceKey = `i18n${attribute.replace(/(^|-)(\w)/g, (_, __, letter) => letter.toUpperCase())}Source`;
+          const original = element.dataset[sourceKey] || element.getAttribute(attribute);
+          element.dataset[sourceKey] = original;
+          element.setAttribute(attribute, translateUiText(original, state.language));
+        });
+      });
+    }
+
+    function isTranslationSkipped(element) {
+      return !!(element.closest && element.closest('[data-i18n-skip], script, style, textarea, input, [contenteditable="true"]'));
+    }
+
+    function renderLanguageControls() {
+      document.querySelectorAll('[data-language-picker]').forEach((picker) => {
+        picker.classList.toggle('open', !!state.languageMenuOpen);
+      });
+      document.querySelectorAll('[data-language-toggle]').forEach((button) => {
+        button.classList.toggle('active', state.language !== 'default');
+        button.setAttribute('aria-expanded', state.languageMenuOpen ? 'true' : 'false');
+        button.title = translateUiText('Language', state.language);
+        button.setAttribute('aria-label', translateUiText('Change language', state.language));
+      });
+      document.querySelectorAll('[data-language-menu]').forEach((menu) => {
+        menu.toggleAttribute('hidden', !state.languageMenuOpen);
+      });
+      document.querySelectorAll('[data-language-option]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.languageOption === state.language);
+      });
+    }
+
+    function isClientQuotaError(error) {
+      const message = String(error && error.message ? error.message : error || '').toLowerCase();
+      return message.includes('quota exceeded') ||
+        message.includes('read quota') ||
+        message.includes('too many requests') ||
+        message.includes('resource_exhausted') ||
+        message.includes('429');
+    }
+
+    function formatClientErrorMessage(error) {
+      if (isClientQuotaError(error)) return 'Google Sheets is busy. Please wait a few seconds and try again.';
+      return error && error.message ? error.message : String(error);
+    }
+

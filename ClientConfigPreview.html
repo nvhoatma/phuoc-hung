@@ -1,0 +1,489 @@
+    /*
+      Config App preview panel renderers.
+    */
+    function renderConfigPreviewPanel(data) {
+      const item = getActiveConfigItem();
+      const mode = item ? item.previewMode : 'record';
+      return `
+        <div class="config-preview-head">
+          <div>
+            <strong>Preview</strong>
+            <span>${escapeHtml(item ? item.label : '')}</span>
+          </div>
+          <button class="config-icon-btn" type="button" data-toggle-config-preview title="Full screen preview" aria-label="Full screen preview">
+            ${state.configPreviewFull ? ICONS.collapse : ICONS.expand}
+          </button>
+        </div>
+        <div class="config-preview-body">
+          ${renderConfigPreviewContent(data, mode)}
+        </div>
+      `;
+    }
+
+    function renderNoConfigPreview(item) {
+      return `
+        <div class="config-preview-empty">
+          <strong>${escapeHtml(item ? item.label : 'Config')}</strong>
+          <span>This config is structural data, so editing accuracy matters more than visual preview.</span>
+        </div>
+      `;
+    }
+
+    function renderConfigPreviewContent(data, mode) {
+      const row = getSelectedConfigRow();
+      const record = row ? row.record : {};
+      return renderConfigPreviewForRecord(data, mode, record);
+    }
+
+    function renderConfigPreviewForRecord(data, mode, record) {
+      const configKey = state.activeConfigKey || '';
+      if (configKey === 'appConfig') return renderAppConfigPreview(data, record);
+      if (configKey === 'navigation') return renderNavigationConfigPreview(data);
+      if (configKey === 'page') return renderPageConfigPreview(record);
+      if (configKey === 'view') return renderViewConfigPreview(record);
+      if (configKey === 'form') return renderFormConfigPreview(record);
+      if (configKey === 'component') return renderComponentConfigPreview(record);
+      if (configKey === 'tableIndex') return renderTableIndexConfigPreview(data, record);
+      if (configKey === 'dataColumn') return renderDataColumnConfigPreview(data, record);
+      if (configKey === 'relationship') return renderRelationshipConfigPreview(data, record);
+      if (configKey === 'dataServices') return renderServiceConfigPreview(record);
+      if (configKey === 'appPermission') return renderPermissionConfigPreview(data, record);
+      if (mode === 'none') return renderNoConfigPreview(getActiveConfigItem());
+      if (mode === 'navigation') return renderNavigationConfigPreview(data);
+      if (mode === 'ui') return renderUiConfigPreview(record);
+      if (mode === 'report') return renderReportConfigPreview(data);
+      return renderRecordConfigPreview(record);
+    }
+
+    function collectConfigFormRecord(root) {
+      if (!root || !state.configData) return {};
+      const formData = new FormData(root);
+      const existing = (getSelectedConfigRow() || {}).record || {};
+      return (state.configData.headers || []).reduce((record, header) => {
+        record[header] = formData.has(header) ? (formData.get(header) || '') : (existing[header] || '');
+        return record;
+      }, {});
+    }
+
+    function refreshConfigPreviewFromForm(root) {
+      if (!root || state.appMode !== 'config') return;
+      const body = document.querySelector('.config-preview-body');
+      if (!body) return;
+      const item = getActiveConfigItem();
+      body.innerHTML = renderConfigPreviewForRecord(state.configData || { rows: [] }, item ? item.previewMode : 'record', collectConfigFormRecord(root));
+    }
+
+    function renderAppConfigPreview(data, record) {
+      const settings = buildConfigSettingsMap(data);
+      const selectedName = getRecordValueByHints(record, ['config_name', 'name', 'item', 'key']);
+      const selectedValue = getRecordValueByHints(record, ['config_value', 'value', 'setting_value']);
+      const appName = selectedName && normalizeClientConfigKey(selectedName) === 'app_name'
+        ? selectedValue
+        : (settings.app_name || settings.app || getProcessName());
+      const accent = normalizeConfigColor(settings.accent_color || settings.color || getRecordValueByHints(record, ['color', 'config_value', 'value']));
+      const searchOn = configBoolValue(settings.show_search, true);
+      const groupingOn = configBoolValue(settings.enable_grouping, true);
+      return `
+        <div class="preview-app-shell" style="--preview-accent:${escapeAttr(accent)}">
+          <aside>
+            <strong>${escapeHtml(appName || 'Process App')}</strong>
+            <span></span>
+            <b>Overview</b>
+            <b>Operation</b>
+          </aside>
+          <main>
+            <div class="preview-app-toolbar">
+              <button type="button">${ICONS.table}</button>
+              <button type="button">${ICONS.plus}</button>
+              ${searchOn ? '<em>Search records</em>' : ''}
+            </div>
+            <section>
+              <h3>${escapeHtml(selectedName || 'App config')}</h3>
+              <p>${escapeHtml(selectedValue || getRecordValueByHints(record, ['note', 'detail']) || 'Live app behavior and theme settings.')}</p>
+              ${groupingOn ? '<small>Grouping enabled</small>' : '<small>Grouping hidden</small>'}
+            </section>
+          </main>
+        </div>
+      `;
+    }
+
+    function buildConfigSettingsMap(data) {
+      return ((data && data.rows) || []).reduce((acc, row) => {
+        const name = normalizeClientConfigKey(getRecordValueByHints(row.record, ['config_name', 'name', 'item', 'key']));
+        const value = getRecordValueByHints(row.record, ['config_value', 'value', 'setting_value']);
+        if (name) acc[name] = value;
+        return acc;
+      }, {});
+    }
+
+    function renderPageConfigPreview(record) {
+      const title = getRecordValueByHints(record, ['item', 'title', 'label', 'name']) || getRecordValueByHints(record, ['page_id', 'page']) || 'Page';
+      const pageType = normalizeClientConfigKey(getRecordValueByHints(record, ['page_type', 'type']) || 'table');
+      const tableName = getRecordValueByHints(record, ['table_name', 'table', 'source_table']);
+      const titleColumn = getRecordValueByHints(record, ['title_column', 'record_title_column', 'record_name_column', 'display_name_column', 'display_column', 'main_display_name', 'main_display_field', 'display_name', 'display_field', 'title_field']);
+      const reportName = getRecordValueByHints(record, ['report_name', 'report', 'report_key']);
+      const link = getRecordValueByHints(record, ['embed_link', 'external_link', 'url', 'link']);
+      if (pageType === 'report') {
+        return `
+          <div class="preview-page-card report">
+            <header><span>Report page</span><strong>${escapeHtml(title)}</strong></header>
+            <div class="preview-kpi-row"><b>${escapeHtml(reportName || 'Overview')}</b><em>Metric board</em></div>
+            <div class="preview-kpi-grid"><span></span><span></span><span></span></div>
+          </div>
+        `;
+      }
+      if (pageType === 'external_link' || pageType === 'embed_link' || link) {
+        return `
+          <div class="preview-page-card link">
+            <header><span>${escapeHtml(pageType === 'embed_link' ? 'Embed page' : 'Link page')}</span><strong>${escapeHtml(title)}</strong></header>
+            <div class="preview-browser-bar">${escapeHtml(link || 'https://')}</div>
+            <div class="preview-embed-box">${ICONS.expand}<span>${escapeHtml(pageType === 'embed_link' ? 'Embedded content' : 'Open external content')}</span></div>
+          </div>
+        `;
+      }
+      return `
+        <div class="preview-page-card">
+          <header><span>Table page</span><strong>${escapeHtml(title)}</strong></header>
+          <div class="preview-page-meta">${escapeHtml(tableName || 'Choose a table')}</div>
+          ${renderPreviewDisplayName(titleColumn)}
+          <div class="preview-table-lines">
+            <span></span><span></span><span></span>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderViewConfigPreview(record) {
+      const viewType = normalizeClientConfigKey(getRecordValueByHints(record, ['view_type', 'type']) || 'table');
+      const title = getRecordValueByHints(record, ['item', 'title', 'label', 'name']) || titleCaseConfig(viewType || 'View');
+      const columns = getPreviewColumnsForRecord(record);
+      const groups = parseConfigMultiValue(getRecordValueByHints(record, ['default_group_by', 'default_groups', 'group_by']));
+      const displayName = getRecordValueByHints(record, ['title_column', 'record_title_column', 'record_name_column', 'display_name_column', 'display_column', 'main_display_name', 'main_display_field', 'display_name', 'display_field', 'title_field']);
+      const sections = parseConfigFormSections(getRecordValueByHints(record, ['section_layout', 'form_sections', 'sections']));
+      if (viewType === 'detail') return renderDetailViewPreview(title, columns, groups, displayName, sections);
+      if (viewType === 'card') return renderCardViewPreview(title, columns, groups, displayName);
+      return renderTableViewPreview(title, columns, groups, displayName);
+    }
+
+    function renderPreviewDisplayName(displayName) {
+      return displayName ? `<div class="preview-form-display-name"><b>Title</b><span>${escapeHtml(displayName)}</span></div>` : '';
+    }
+
+    function renderTableViewPreview(title, columns, groups, displayName) {
+      const displayColumns = columns.length ? columns : ['Column 1', 'Column 2', 'Column 3'];
+      return `
+        <div class="preview-view-frame">
+          <header><strong>${escapeHtml(title)}</strong><span>Table view</span></header>
+          ${renderPreviewDisplayName(displayName)}
+          ${renderPreviewGroupChips(groups)}
+          <div class="preview-mini-table">
+            <div>${displayColumns.slice(0, 5).map((column) => `<b>${escapeHtml(column)}</b>`).join('')}</div>
+            <div>${displayColumns.slice(0, 5).map((column) => `<span>${escapeHtml(getPreviewSampleValue(column))}</span>`).join('')}</div>
+            <div>${displayColumns.slice(0, 5).map((column) => `<span>${escapeHtml(getPreviewSampleValue(column, 2))}</span>`).join('')}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderDetailViewPreview(title, columns, groups, displayName, sections) {
+      const displayColumns = columns.length ? columns : ['Category', 'Sub Category', 'Value'];
+      const sectionHtml = sections && sections.length
+        ? sections.slice(0, 3).map((section) => {
+          const fields = section.fields.length ? section.fields : displayColumns.slice(0, 3);
+          return `<div class="preview-form-section"><b>${escapeHtml(section.title)}</b>${fields.slice(0, 4).map((column) => `<label><small>${escapeHtml(column)}</small><span></span></label>`).join('')}</div>`;
+        }).join('')
+        : displayColumns.slice(0, 6).map((column) => `<label><small>${escapeHtml(column)}</small><b>${escapeHtml(getPreviewSampleValue(column))}</b></label>`).join('');
+      return `
+        <div class="preview-view-frame detail">
+          <header><strong>${escapeHtml(title)}</strong><span>List detail view</span></header>
+          ${renderPreviewDisplayName(displayName)}
+          ${renderPreviewGroupChips(groups)}
+          <div class="preview-detail-grid">
+            <aside>${displayColumns.slice(0, 3).map((column) => `<span>${escapeHtml(getPreviewSampleValue(column))}</span>`).join('')}</aside>
+            <section>${sectionHtml}</section>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderCardViewPreview(title, columns, groups, displayName) {
+      const displayColumns = columns.length ? columns : ['Category', 'Photo', 'Value'];
+      return `
+        <div class="preview-view-frame card">
+          <header><strong>${escapeHtml(title)}</strong><span>Card view</span></header>
+          ${renderPreviewDisplayName(displayName)}
+          ${renderPreviewGroupChips(groups)}
+          <div class="preview-card-grid">
+            ${[1, 2].map((index) => `
+              <article>
+                <div></div>
+                <strong>${escapeHtml(getPreviewSampleValue(displayColumns[0], index))}</strong>
+                ${displayColumns.slice(1, 4).map((column) => `<span><small>${escapeHtml(column)}</small>${escapeHtml(getPreviewSampleValue(column, index))}</span>`).join('')}
+              </article>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderFormConfigPreview(record) {
+      const rawLayoutType = getRecordValueByHints(record, ['form_type', 'form_layout_type', 'layout_type']);
+      const rawMode = getRecordValueByHints(record, ['mode', 'form_mode', 'edit_mode', 'type'])
+        || (['quick', 'full', 'advanced', 'nested'].includes(normalizeClientConfigKey(rawLayoutType)) ? rawLayoutType : 'quick');
+      const rawModeKey = normalizeClientConfigKey(rawMode);
+      const formMode = rawModeKey === 'nested' || rawModeKey === 'related' || rawModeKey === 'subform'
+        ? 'nested'
+        : rawModeKey === 'full' || rawModeKey === 'advanced'
+        ? 'full'
+        : 'quick';
+      const formLayoutType = normalizeClientConfigKey(rawLayoutType) === 'multi_step' ? 'multi-step' : 'default';
+      const title = getRecordValueByHints(record, ['item', 'title', 'label', 'name']) || (formMode === 'nested' ? 'Nested form' : formMode === 'full' ? 'Full form' : 'Quick form');
+      const columns = getPreviewColumnsForRecord(record);
+      const nested = getFormNestedTableNames(record);
+      const labelPosition = getRecordValueByHints(record, ['label_position', 'label']) || 'top';
+      const mainDisplay = getRecordValueByHints(record, ['main_display_name', 'main_display_field', 'display_name', 'display_field', 'title_field']);
+      const sections = parseConfigFormSections(getRecordValueByHints(record, ['section_layout', 'form_sections', 'sections']));
+      const displayColumns = columns.length ? columns : ['Category', 'Sub Category', 'Key activity'];
+      const sectionPreviewItems = getPreviewSectionItems(sections, displayColumns);
+      const sectionHtml = sectionPreviewItems.length
+        ? sectionPreviewItems.map((section) => {
+          const fields = section.fields.length ? section.fields : displayColumns.slice(0, 3);
+          return `
+            <div class="preview-form-section">
+              <b>${escapeHtml(section.title)}</b>
+              ${fields.slice(0, formMode === 'full' ? 6 : 4).map((column) => `
+                <label>
+                  <small>${escapeHtml(column)}</small>
+                  <span>${escapeHtml(labelPosition === 'left' ? getPreviewSampleValue(column) : '')}</span>
+                </label>
+              `).join('')}
+            </div>
+          `;
+        }).join('')
+        : `
+          <div class="preview-form-fields">
+            ${displayColumns.slice(0, formMode === 'full' ? 8 : 4).map((column) => `
+              <label>
+                <small>${escapeHtml(column)}</small>
+                <span>${escapeHtml(labelPosition === 'left' ? getPreviewSampleValue(column) : '')}</span>
+              </label>
+            `).join('')}
+          </div>
+        `;
+      return `
+        <div class="preview-form-frame ${formMode === 'full' ? 'full' : 'quick'}">
+          <header><strong>${escapeHtml(title)}</strong><span>${escapeHtml(formMode === 'full' ? 'Full edit drawer' : 'Quick create form')}${formLayoutType === 'multi-step' ? ' · Multi-step' : ''}</span></header>
+          ${mainDisplay ? `<div class="preview-form-display-name"><b>Display</b><span>${escapeHtml(mainDisplay)}</span></div>` : ''}
+          ${sectionHtml}
+          ${nested.length ? `<div class="preview-nested-tables"><b>Nested</b>${nested.map((name) => `<span>${escapeHtml(name)}</span>`).join('')}</div>` : ''}
+        </div>
+      `;
+    }
+
+    function getPreviewSectionItems(sections, displayColumns) {
+      if (!sections || !sections.length) return [];
+      const byKey = (displayColumns || []).reduce((acc, column) => {
+        acc[normalizeClientConfigKey(column)] = column;
+        return acc;
+      }, {});
+      const used = {};
+      const mapped = sections.map((section, index) => {
+        const fields = (section.fields || [])
+          .map((field) => byKey[normalizeClientConfigKey(field)] || '')
+          .filter((field) => {
+            const key = normalizeClientConfigKey(field);
+            if (!key || used[key]) return false;
+            used[key] = true;
+            return true;
+        });
+        return { title: section.title || `Section ${index + 1}`, fields };
+      }).filter((section) => section.fields.length);
+      return mapped;
+    }
+
+    function renderComponentConfigPreview(record) {
+      const type = normalizeClientConfigKey(getRecordValueByHints(record, ['component_type', 'type', 'config_name', 'item']));
+      const label = getRecordValueByHints(record, ['item', 'title', 'label', 'name', 'config_name']) || 'Component';
+      const active = configBoolValue(getRecordValueByHints(record, ['status', 'active', 'enabled']), true);
+      const buttons = [
+        ['search', 'Search'],
+        ['sort', 'Sort'],
+        ['status_filter', 'Status'],
+        ['grouping', 'Group'],
+        ['new_row', 'New'],
+        ['edit', 'Edit'],
+      ];
+      return `
+        <div class="preview-component-frame">
+          <header><strong>${escapeHtml(label)}</strong><span>${escapeHtml(active ? 'Active component' : 'Inactive component')}</span></header>
+          <div class="preview-component-toolbar">
+            ${buttons.map(([key, text]) => `<button type="button" class="${type === key ? 'active' : ''}">${escapeHtml(text)}</button>`).join('')}
+          </div>
+          <p>${escapeHtml(getRecordValueByHints(record, ['note', 'detail']) || 'Controls a small part of a page view.')}</p>
+        </div>
+      `;
+    }
+
+    function renderTableIndexConfigPreview(data, record) {
+      const rows = getSelectedConfigRow() ? [{ record }] : ((data && data.rows) || []).slice(0, 5);
+      return `
+        <div class="preview-schema-list">
+          ${rows.map((row) => {
+            const tableName = getRecordValueByHints(row.record, ['table_name', 'table', 'item', 'name']) || (row.values ? getConfigRowTitle(row) : 'Table');
+            const table = findBootstrapTableByName(tableName);
+            return `<article><strong>${escapeHtml(tableName)}</strong><span>${escapeHtml(table ? `${getSchemaColumns(table).length} columns` : 'Table binding')}</span></article>`;
+          }).join('') || renderNoConfigPreview(getActiveConfigItem())}
+        </div>
+      `;
+    }
+
+    function renderDataColumnConfigPreview(data, record) {
+      const tableName = getRecordValueByHints(record, ['table_name', 'table', 'source_table']);
+      const column = getRecordValueByHints(record, ['column_name', 'column', 'field', 'item']) || 'Column';
+      const type = getRecordValueByHints(record, ['column_type', 'type', 'data_type']) || 'Text';
+      return `
+        <div class="preview-column-card">
+          <header><strong>${escapeHtml(column)}</strong><span>${escapeHtml(tableName || 'Data column')}</span></header>
+          <div><b>Type</b><span>${escapeHtml(type)}</span></div>
+          <div><b>Visible in app</b><span>${escapeHtml(configBoolValue(getRecordValueByHints(record, ['visible', 'show', 'status']), true) ? 'Yes' : 'No')}</span></div>
+          <div><b>Groupable</b><span>${escapeHtml(configBoolValue(getRecordValueByHints(record, ['groupable', 'can_group']), false) ? 'Yes' : 'Auto')}</span></div>
+        </div>
+      `;
+    }
+
+    function renderRelationshipConfigPreview(data, record) {
+      const sourceTable = getRecordValueByHints(record, ['source_table', 'parent_table', 'from_table', 'table_name', 'table']);
+      const sourceField = getRecordValueByHints(record, ['source_field', 'parent_field', 'from_field', 'key_field', 'field']);
+      const targetTable = getRecordValueByHints(record, ['target_table', 'child_table', 'to_table', 'related_table']);
+      const targetField = getRecordValueByHints(record, ['target_field', 'child_field', 'to_field', 'lookup_field', 'related_field']);
+      return `
+        <div class="preview-relationship-frame">
+          <div><strong>${escapeHtml(sourceTable || 'Parent table')}</strong><span>${escapeHtml(sourceField || 'Parent field')}</span></div>
+          <em>${ICONS.chevronDown}</em>
+          <div><strong>${escapeHtml(targetTable || 'Nested table')}</strong><span>${escapeHtml(targetField || 'Nested field')}</span></div>
+          <p>Nested records show only when these fields match.</p>
+        </div>
+      `;
+    }
+
+    function renderServiceConfigPreview(record) {
+      const title = getRecordValueByHints(record, ['item', 'title', 'label', 'name', 'service']) || 'Data service';
+      const source = getRecordValueByHints(record, ['source', 'table_name', 'table', 'endpoint']);
+      return `
+        <div class="preview-service-frame">
+          <strong>${escapeHtml(title)}</strong>
+          <span>${escapeHtml(source || 'Service binding')}</span>
+          <div><b>Read</b><b>Write</b><b>Sync</b></div>
+        </div>
+      `;
+    }
+
+    function renderPermissionConfigPreview(data, record) {
+      const rows = ((data && data.rows) || []).filter((row) => getRecordValueByHints(row.record, ['email', 'user_email', 'account']));
+      const selectedEmail = getRecordValueByHints(record, ['email', 'user_email', 'account']);
+      return `
+        <div class="preview-permission-frame">
+          <strong>${ICONS.lock || ''} Config access</strong>
+          <span>${escapeHtml(rows.length ? `${rows.length} allowed account${rows.length === 1 ? '' : 's'}` : 'No allowed account yet')}</span>
+          ${selectedEmail ? `<b>${escapeHtml(selectedEmail)}</b>` : ''}
+          <p>Only active emails in this table can open Config app from User app.</p>
+        </div>
+      `;
+    }
+
+    function getPreviewColumnsForRecord(record) {
+      const table = getConfigTargetTable(record);
+      const schema = getSchemaColumns(table);
+      const explicitOrder = parseConfigMultiValue(getRecordValueByHints(record, ['column_order', 'field_order', 'columns_order', 'visible_columns']));
+      const sections = parseConfigFormSections(getRecordValueByHints(record, ['section_layout', 'form_sections', 'sections']));
+      const sectionOrder = sections.reduce((acc, section) => acc.concat(section.fields || []), []);
+      const useSectionOrder = !explicitOrder.length && sections.length > 0;
+      const sectionKeys = new Set(sectionOrder.map(normalizeClientConfigKey));
+      const hidden = new Set(parseConfigMultiValue(getRecordValueByHints(record, ['hidden_columns', 'hide_columns', 'hidden_fields'])).map(normalizeClientConfigKey));
+      const schemaKeys = schema.reduce((acc, column) => {
+        acc[normalizeClientConfigKey(column)] = column;
+        return acc;
+      }, {});
+      const order = explicitOrder.length ? explicitOrder : sectionOrder;
+      const ordered = order.length
+        ? order.map((name) => schemaKeys[normalizeClientConfigKey(name)] || name).concat(useSectionOrder ? [] : schema.filter((name) => !order.map(normalizeClientConfigKey).includes(normalizeClientConfigKey(name))))
+        : schema;
+      return ordered.filter((name) => {
+        const key = normalizeClientConfigKey(name);
+        return !hidden.has(key) && (!useSectionOrder || sectionKeys.has(key));
+      });
+    }
+
+    function renderPreviewGroupChips(groups) {
+      if (!groups || !groups.length) return '';
+      return `<div class="preview-group-chips"><span>Grouped by</span>${groups.map((group) => `<b>${escapeHtml(group)}</b>`).join('')}</div>`;
+    }
+
+    function getPreviewSampleValue(column, index) {
+      const key = normalizeClientConfigKey(column);
+      if (/photo|image|file/.test(key)) return 'Image';
+      if (/date|time/.test(key)) return 'Today';
+      if (/value|amount|price|cost|qty|quantity|score/.test(key)) return index === 2 ? '8' : '5';
+      if (/status/.test(key)) return 'Active';
+      if (/sub/.test(key)) return index === 2 ? 'Dining Chair Oak' : 'Dining Table Oak';
+      if (/category|group/.test(key)) return index === 2 ? 'Category 2' : 'Category 1';
+      if (/key|activity/.test(key)) return index === 2 ? 'Activity 2' : 'Activity 1';
+      return index === 2 ? 'Sample 2' : 'Sample 1';
+    }
+
+    function titleCaseConfig(value) {
+      return String(value || '').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+    }
+
+    function renderNavigationConfigPreview(data) {
+      const rows = (data.rows || []).slice(0, 12);
+      return `
+        <div class="preview-phone">
+          <div class="preview-brand">${escapeHtml(getProcessName())}</div>
+          ${rows.map((row) => `
+            <div class="preview-nav-row">
+              <span></span>
+              <strong>${escapeHtml(getRecordValueByHints(row.record, ['label', 'title', 'nav_id']) || getConfigRowTitle(row))}</strong>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    function renderUiConfigPreview(record) {
+      const title = getRecordValueByHints(record, ['title', 'label', 'name', 'page', 'view', 'component']) || 'UI preview';
+      const color = getRecordValueByHints(record, ['color', 'theme_color', 'accent', 'background']) || '#c89a5b';
+      return `
+        <div class="preview-ui-card" style="--preview-accent:${escapeAttr(color)}">
+          <div class="preview-ui-strip"></div>
+          <h3>${escapeHtml(title)}</h3>
+          <p>${escapeHtml(getRecordValueByHints(record, ['subtitle', 'description', 'note']) || 'Live settings preview')}</p>
+          <button type="button">Action</button>
+        </div>
+      `;
+    }
+
+    function renderReportConfigPreview(data) {
+      const rows = (data.rows || []).slice(0, 4);
+      return `
+        <div class="preview-report-grid">
+          ${rows.map((row) => `
+            <div>
+              <strong>${escapeHtml(getRecordValueByHints(row.record, ['label', 'title', 'metric_key']) || getConfigRowTitle(row))}</strong>
+              <span>${escapeHtml(getRecordValueByHints(row.record, ['metric_type', 'item_type', 'source_table']) || 'report item')}</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    function renderRecordConfigPreview(record) {
+      const entries = Object.entries(record || {}).filter((entry) => entry[1]).slice(0, 8);
+      return `
+        <div class="preview-record">
+          ${entries.map(([key, value]) => `
+            <label><span>${escapeHtml(key)}</span><strong>${escapeHtml(value)}</strong></label>
+          `).join('') || '<div class="config-preview-empty"><strong>No row selected</strong><span>Select a config item to preview values.</span></div>'}
+        </div>
+      `;
+    }

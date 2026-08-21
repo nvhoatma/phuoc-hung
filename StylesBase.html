@@ -1,0 +1,65 @@
+    /*
+      Base tokens, reset, body defaults.
+    */
+
+    /*
+      Base design system and desktop/tablet layout.
+      Keep mobile-specific overrides out of this file; use StylesMobile.html
+      with body.mobile-viewport selectors so desktop view remains stable.
+    */
+    :root {
+      --walnut-900: #3f270f;
+      --walnut-800: #5b3e1c;
+      --walnut-700: #7a4e1d;
+      --gold-500: #c89a5b;
+      --sand-200: #e7d7c1;
+      --sand-100: #f3eadf;
+      --charcoal: #343a40;
+      --grey-700: #4f565d;
+      --grey-500: #6c757d;
+      --grey-200: #e9ecef;
+      --grey-100: #f4f5f6;
+      --off-white: #f8f9fa;
+      --white: #ffffff;
+      --success: #3f7d58;
+      --warning: #a66a18;
+      --danger: #a6423a;
+      --shadow-soft: 0 12px 36px rgba(52, 58, 64, .08);
+      --shadow-panel: 0 24px 60px rgba(52, 58, 64, .12);
+      --radius: 8px;
+      --sidebar-width: 234px;
+      --sidebar-collapsed-width: 72px;
+      color-scheme: light;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      min-width: 100%;
+      min-height: 100%;
+      overflow-x: hidden;
+    }
+
+    body {
+      margin: 0;
+      background: var(--off-white);
+      color: var(--charcoal);
+      font-family: Roboto, Arial, sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    textarea,
+    select {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+

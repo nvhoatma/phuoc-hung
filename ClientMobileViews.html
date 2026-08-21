@@ -1,0 +1,63 @@
+    /*
+      Mobile-only record card renderers.
+      These are shown by CSS only when body.mobile-viewport is active.
+      Keep mobile UX changes here plus StylesMobile.html to avoid desktop regressions.
+    */
+    function renderMobileRecordList(headers, rows) {
+      if (!rows.length) {
+        return `
+          <div class="mobile-record-list">
+            <div class="mobile-empty">
+              <strong>No records</strong>
+              <span>Try another search or status filter.</span>
+            </div>
+          </div>
+        `;
+      }
+      return `
+        <div class="mobile-record-list">
+          ${rows.map((row) => renderMobileRecordCard(headers, row)).join('')}
+        </div>
+      `;
+    }
+
+    function renderMobileRecordCard(headers, row) {
+      const title = getRowTitle(headers, row);
+      const allowEdit = canEditRows() && Number(row.rowNumber) >= 0;
+      const deleteButton = renderDeleteButton(row.rowNumber, 'mobile-record-action mobile-record-action-danger');
+      const previewFields = headers
+        .filter((header, index) => index > 0 && !/note|detail|description|summary|comment|address/i.test(header))
+        .slice(0, 3);
+      return `
+        <article class="mobile-record-card ${row.pendingSave ? 'pending-save-row' : ''}">
+          <div class="mobile-record-head">
+            <button class="mobile-record-title" type="button" data-select-master-row="${row.rowNumber}">
+              ${escapeHtml(title)}
+            </button>
+          </div>
+          <div class="mobile-record-fields">
+            ${previewFields.map((header) => {
+              const value = row.record[header] || '-';
+              return `
+                <div class="mobile-record-field">
+                  <span>${escapeHtml(getFieldLabel(header))}</span>
+                  <strong class="${row.record[header] ? '' : 'empty-cell'}">${escapeHtml(value)}</strong>
+                </div>
+              `;
+            }).join('')}
+          </div>
+          <div class="mobile-record-actions">
+            ${allowEdit ? `
+            <button class="mobile-record-action" type="button" data-edit-row="${row.rowNumber}">
+              ${ICONS.settings}<span>Edit</span>
+            </button>
+            <button class="mobile-record-action mobile-record-action-primary" type="button" data-advanced-edit-row="${row.rowNumber}">
+              ${ICONS.advancedEdit}<span>Full form</span>
+            </button>
+            ` : ''}
+            ${deleteButton ? deleteButton.replace('</button>', '<span>Delete</span></button>') : ''}
+          </div>
+        </article>
+      `;
+    }
+

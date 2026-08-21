@@ -1,0 +1,2562 @@
+    /*
+      Main client renderer for overview, desktop table, list-detail, drawers,
+      forms, grouping, sorting, and rendered-control event binding.
+      Mobile record-card markup lives in ClientMobileViews.html.
+    */
+    function renderPage() {
+      if (state.tableHydrationTicker) {
+        window.clearInterval(state.tableHydrationTicker);
+        state.tableHydrationTicker = null;
+      }
+      const topbarBenchmark = document.querySelector('[data-table-load-benchmark]');
+      if (topbarBenchmark) topbarBenchmark.hidden = true;
+      syncAppModeShell();
+      if (state.appMode === 'config') {
+        renderConfigApp();
+        scheduleApplyLanguage();
+        return;
+      }
+      renderSidebar();
+      const table = state.tableData && state.tableData.table;
+      el.pageTitle.textContent = state.activeStep ? state.activeStep.label : getProcessName();
+      el.breadcrumb.textContent = getStepPath(state.activeStep && state.activeStep.id).join(' / ') || 'Operation';
+
+      if (state.overviewData) {
+        el.content.innerHTML = renderOverview(state.overviewData);
+        bindOverviewEvents();
+        scheduleApplyLanguage();
+        return;
+      }
+      disposeOverviewCharts();
+      if (state.activeLinkUrl) {
+        el.content.innerHTML = renderLinkedPage();
+        scheduleApplyLanguage();
+        return;
+      }
+      if (state.routeLoading && state.pendingStep) {
+        el.content.innerHTML = renderRouteLoadingPanel(state.pendingStep);
+        scheduleApplyLanguage();
+        return;
+      }
+      if (!table) {
+        el.content.innerHTML = renderEmpty();
+        scheduleApplyLanguage();
+        return;
+      }
+
+      const rows = filteredRows();
+      el.content.innerHTML = renderTablePanel(table, rows);
+      bindTableEvents();
+      refreshTableHydrationIndicator();
+      restoreMasterListScroll();
+      if (typeof enhanceImagePreviewSafe === 'function') enhanceImagePreviewSafe('detail');
+      scheduleApplyLanguage();
+    }
+
+    function renderPagePreservingTableFocus() {
+      const active = document.activeElement;
+      const isSearch = active && active.id === 'searchInput';
+      const isFilterSearch = active && active.matches && active.matches('[data-filter-search]');
+      const selector = isSearch ? '#searchInput' : isFilterSearch ? '[data-filter-search]' : '';
+      const selectionStart = selector && typeof active.selectionStart === 'number' ? active.selectionStart : null;
+      const selectionEnd = selector && typeof active.selectionEnd === 'number' ? active.selectionEnd : null;
+
+      renderPage();
+
+      if (!selector) return;
+      window.requestAnimationFrame(() => {
+        const nextInput = document.querySelector(selector);
+        if (!nextInput) return;
+        nextInput.focus({ preventScroll: true });
+        if (typeof nextInput.setSelectionRange === 'function' && selectionStart !== null && selectionEnd !== null) {
+          const caretStart = Math.min(selectionStart, nextInput.value.length);
+          const caretEnd = Math.min(selectionEnd, nextInput.value.length);
+          nextInput.setSelectionRange(caretStart, caretEnd);
+        }
+      });
+    }
+
+    function renderLinkedPage() {
+      const url = state.activeLinkUrl || '';
+      const title = state.activeStep ? state.activeStep.label : 'Linked page';
+      if (state.activePageType === 'embed') {
+        return `
+          <section class="embed-page">
+            <iframe src="${escapeAttr(url)}" title="${escapeAttr(title)}" loading="lazy"></iframe>
+          </section>
+        `;
+      }
+      return `
+        <section class="panel empty linked-page">
+          <div>
+            <h3>${escapeHtml(title)}</h3>
+            <p>${escapeHtml(url)}</p>
+            <a class="primary-link-button" href="${escapeAttr(url)}" target="_blank" rel="noopener">Open page</a>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderRouteLoadingPanel(item) {
+      const title = item && item.label ? item.label : 'Loading page';
+      const table = item && item.tableKey && state.bootstrap && state.bootstrap.tables
+        ? state.bootstrap.tables[item.tableKey]
+        : null;
+      const subtitle = table
+        ? `${table.sheetName || table.name || item.tableKey} - preparing records`
+        : 'Preparing page';
+      return `
+        <section class="panel route-loading-panel">
+          <div class="route-loading-head">
+            <div>
+              <strong>${escapeHtml(title)}</strong>
+              <span>${escapeHtml(subtitle)}</span>
+            </div>
+            <i aria-hidden="true"></i>
+          </div>
+          <div class="route-loading-lines" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderHardRefreshPanel() {
+      return `
+        <section class="panel route-loading-panel hard-refresh-panel">
+          <div class="route-loading-head">
+            <div>
+              <strong>Refreshing app</strong>
+              <span>Loading the latest data and configuration</span>
+            </div>
+            <i aria-hidden="true"></i>
+          </div>
+          <div class="route-loading-lines" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderOverview(data) {
+      const rows = data.table && data.table.rows ? data.table.rows : [];
+      const headers = data.table && data.table.headers ? data.table.headers : [];
+      return `
+        <section class="page-header overview-header">
+          <div>
+            <h2>${escapeHtml(data.title)}</h2>
+            <p>${escapeHtml(data.subtitle)}</p>
+            ${renderOverviewFilters(data.filters || [])}
+          </div>
+        </section>
+        <section class="overview-grid">
+          ${(data.cards || []).map((card) => `
+            <div class="overview-card"><strong>${escapeHtml(card.value)}</strong><span>${escapeHtml(card.label)}</span></div>
+          `).join('')}
+        </section>
+        <section class="overview-groups">
+          ${(data.groups || []).map((group, index) => renderOverviewGroup(group, index)).join('')}
+        </section>
+        <section class="panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <strong>${escapeHtml(data.table ? data.table.title : data.title)}</strong>
+              <span>Snapshot từ các CRUD table đang binding trong Google Sheet</span>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead>
+              <tbody>${rows.map((row) => renderOverviewRow(headers, row)).join('')}</tbody>
+            </table>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderOverviewFilters(filters) {
+      if (!filters.length) return '';
+      return `
+        <div class="report-filter-bar">
+          ${filters.map((filter) => `
+            <label class="report-filter">
+              <span>${escapeHtml(filter.label || filter.field || 'Filter')}</span>
+              <select class="overview-filter-select" data-overview-filter="${escapeAttr(filter.key)}">
+                <option value="">All</option>
+                ${(filter.options || []).map((option) => `
+                  <option value="${escapeAttr(option.value)}" ${String(filter.value || '') === String(option.value) ? 'selected' : ''}>
+                    ${escapeHtml(option.label)}${option.count != null ? ` (${escapeHtml(option.count)})` : ''}
+                  </option>
+                `).join('')}
+              </select>
+            </label>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    function bindOverviewEvents() {
+      if (typeof enhanceSelectSearch === 'function') enhanceSelectSearch(document);
+      document.querySelectorAll('[data-overview-filter]').forEach((select) => {
+        select.addEventListener('change', () => updateOverviewFilter(select.dataset.overviewFilter, select.value));
+      });
+      renderOverviewCharts();
+    }
+
+    async function updateOverviewFilter(key, value) {
+      if (!state.activeOverviewKey) return;
+      setOverviewFilterState(state.activeOverviewKey, key, value);
+      const item = { overviewKey: state.activeOverviewKey };
+      const cacheKey = getItemCacheKey(item);
+      if (state.dataCache[cacheKey]) {
+        state.overviewData = state.dataCache[cacheKey];
+        renderPage();
+        return;
+      }
+      setLoading(true);
+      try {
+        state.overviewData = await fetchItemData(item, false);
+        renderPage();
+      } catch (error) {
+        showError(error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function renderOverviewGroup(group, index) {
+      const values = group.values || {};
+      const entries = Object.entries(values).sort((a, b) => b[1] - a[1]).slice(0, 6);
+      const chartPayload = {
+        labels: entries.map(([label]) => label),
+        values: entries.map(([, value]) => Number(value) || 0),
+      };
+      return `
+        <section class="panel">
+          <div class="panel-header">
+            <div class="panel-title"><strong>${escapeHtml(group.label)}</strong><span>Distribution</span></div>
+          </div>
+          ${entries.length
+            ? `<div class="overview-chart" id="overviewChart${index}" data-chart-payload="${escapeAttr(JSON.stringify(chartPayload))}"></div>`
+            : '<div class="chart-empty"><span>No data</span><strong>0</strong></div>'}
+        </section>
+      `;
+    }
+
+    async function renderOverviewCharts() {
+      const chartNodes = Array.from(document.querySelectorAll('[data-chart-payload]'));
+      if (!chartNodes.length) {
+        disposeOverviewCharts();
+        return;
+      }
+      const echartsLib = await ensureEchartsLoaded();
+      if (!echartsLib) return;
+      disposeOverviewCharts();
+      window.__overviewCharts = [];
+      chartNodes.forEach((node) => {
+        if (!document.body.contains(node)) return;
+        const payload = JSON.parse(node.dataset.chartPayload || '{"labels":[],"values":[]}');
+        const labels = [...payload.labels].reverse();
+        const values = [...payload.values].reverse();
+        const chart = echartsLib.init(node, null, { renderer: 'canvas' });
+        chart.setOption({
+          animationDuration: 260,
+          color: ['#C89A5B'],
+          grid: { left: 8, right: 34, top: 10, bottom: 8, containLabel: true },
+          tooltip: {
+            trigger: 'axis',
+            axisPointer: { type: 'shadow' },
+            borderColor: '#E9ECEF',
+            textStyle: { color: '#343A40', fontFamily: 'Roboto' },
+          },
+          xAxis: {
+            type: 'value',
+            minInterval: 1,
+            axisLabel: { color: '#8B949E', fontFamily: 'Roboto' },
+            splitLine: { lineStyle: { color: '#EEF1F4' } },
+          },
+          yAxis: {
+            type: 'category',
+            data: labels,
+            axisTick: { show: false },
+            axisLine: { show: false },
+            axisLabel: { color: '#343A40', fontFamily: 'Roboto', width: 120, overflow: 'truncate' },
+          },
+          series: [{
+            type: 'bar',
+            data: values,
+            barWidth: 9,
+            itemStyle: { borderRadius: [0, 5, 5, 0] },
+            label: { show: true, position: 'right', color: '#343A40', fontWeight: 700, fontFamily: 'Roboto' },
+          }],
+        });
+        window.__overviewCharts.push(chart);
+      });
+      if (!window.__overviewChartResizeBound) {
+        window.addEventListener('resize', () => {
+          (window.__overviewCharts || []).forEach((chart) => chart.resize());
+        });
+        window.__overviewChartResizeBound = true;
+      }
+    }
+
+    function ensureEchartsLoaded() {
+      if (window.echarts) return Promise.resolve(window.echarts);
+      if (window.__echartsLoadPromise) return window.__echartsLoadPromise;
+      window.__echartsLoadPromise = new Promise((resolve) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js';
+        script.async = true;
+        script.onload = () => resolve(window.echarts || null);
+        script.onerror = () => {
+          console.warn('ECharts failed to load.');
+          resolve(null);
+        };
+        document.head.appendChild(script);
+      });
+      return window.__echartsLoadPromise;
+    }
+
+    function disposeOverviewCharts() {
+      if (window.__overviewCharts) window.__overviewCharts.forEach((chart) => chart.dispose());
+      window.__overviewCharts = [];
+    }
+
+    function renderOverviewRow(headers, row) {
+      return `
+        <tr>
+          ${headers.map((header, index) => {
+            const value = row.record ? row.record[header] || '' : '';
+            const isStatus = /status|stage/i.test(header);
+            const cls = index === 0 ? 'primary-cell' : '';
+            return `<td class="${cls}">${renderCellContent(value, isStatus, value)}</td>`;
+          }).join('')}
+        </tr>
+      `;
+    }
+
+    function renderTablePanel(table, rows) {
+      const headers = prioritizeTitleColumnHeader(getVisibleHeaders());
+      const pageConfig = getPageConfigForActiveTable();
+      const aiInsight = getActiveAiInsightConfig(headers);
+      const spreadsheetUrl = table && table.spreadsheetUrl ? table.spreadsheetUrl : state.bootstrap.spreadsheetUrl;
+      const tableUrl = table ? `${spreadsheetUrl}?gid=${table.gid}#gid=${table.gid}` : spreadsheetUrl;
+      const bindingLabel = table.binding === 'inheritedNativeTable'
+        ? `Inherited table: ${table.apiTableName || table.name}`
+        : table.binding === 'inheritedRange'
+        ? 'Inherited snapshot from IMPORTRANGE'
+        : table.binding === 'nativeTable'
+        ? `Native table: ${table.apiTableName || table.name}`
+        : `Data range starts from column ${columnName(table.dataStartColumn || 8)}`;
+      const canWrite = !(table && table.readOnly);
+      const allowCreate = canWrite && canCreateRows();
+      const serverPage = state.tableData && state.tableData.serverPage ? state.tableData.serverPage : null;
+      const recordCount = serverPage ? Number(serverPage.totalRows || serverPage.totalEstimate || 0) : state.tableData.rows.length;
+      const groupFields = getActiveGroupFields(headers);
+      const stats = makeTableStats(headers, rows, groupFields);
+      const pageRows = rows;
+      const dataWindow = state.tableData ? state.tableData.dataWindow || null : null;
+      const dataWindowNote = !serverPage && dataWindow && dataWindow.truncated
+        ? ` - latest ${dataWindow.rowLimit || recordCount} rows loaded`
+        : '';
+      const hydrationNote = state.tableDataLoading ? ' - loading data...' : '';
+      const panelTitle = pageConfig && pageConfig.label ? pageConfig.label : table.name;
+      const panelSubtitle = pageConfig && pageConfig.subtitle ? pageConfig.subtitle : `${table.sheetName} - ${bindingLabel} - ${recordCount} records${dataWindowNote}${hydrationNote}`;
+      const viewTypes = getEnabledTableViewTypes();
+      return `
+        <section class="panel table-panel ${state.tableDataLoading ? 'data-loading' : ''}" aria-busy="${state.tableDataLoading ? 'true' : 'false'}">
+          <div class="panel-header">
+            <div class="panel-title">
+              <strong>${escapeHtml(panelTitle)}</strong>
+              <span>${escapeHtml(panelSubtitle)}</span>
+            </div>
+            <div class="tools">
+              <div class="table-actions" aria-label="Table actions">
+                ${isComponentEnabled('open_sheet', true) ? `<a class="table-icon-btn" href="${escapeAttr(tableUrl)}" target="_blank" rel="noopener" title="Open sheet" aria-label="Open sheet">${ICONS.sheet}</a>` : ''}
+                ${allowCreate ? `<button class="table-icon-btn table-icon-btn-primary" type="button" data-new-row title="New row" aria-label="New row">${ICONS.plus}</button>` : ''}
+                ${aiInsight.enabled ? `<button class="table-icon-btn" type="button" data-ai-insight-view title="Copy AI context" aria-label="Copy AI context">${ICONS.sparkles}</button>` : ''}
+              </div>
+              ${isComponentEnabled('view_switcher', true) ? renderTableViewSwitcher(viewTypes) : ''}
+              ${isComponentEnabled('sort', true) ? renderSortControl(headers) : ''}
+              ${isComponentEnabled('status_filter', true) ? renderSmartFilterControl(headers) : ''}
+              ${isComponentEnabled('search', true) ? `<input class="field" id="searchInput" placeholder="Search records" value="${escapeAttr(state.query)}">` : ''}
+            </div>
+          </div>
+          ${state.tableViewMode === 'detail' || !isComponentEnabled('grouping', true) ? '' : renderTableControlStrip(groupFields, stats)}
+          ${state.tableViewMode === 'detail'
+            ? renderMasterDetailView(headers, pageRows, groupFields, stats)
+            : state.tableViewMode === 'card'
+            ? renderCardView(headers, pageRows, groupFields)
+            : document.body.classList.contains('mobile-viewport')
+            ? renderMobileRecordList(headers, pageRows)
+            : renderTableGrid(headers, pageRows, groupFields)}
+        </section>
+      `;
+    }
+
+    function refreshTableHydrationIndicator() {
+      const node = document.querySelector('[data-table-load-benchmark]');
+      const hydration = state.tableHydration[state.activeTableKey] || null;
+      const active = hydration && ['scheduled', 'loading', 'retrying'].includes(hydration.status);
+      if (node) node.hidden = true;
+      if (!hydration) {
+        if (state.tableHydrationTicker) window.clearInterval(state.tableHydrationTicker);
+        state.tableHydrationTicker = null;
+        return;
+      }
+      if (!node) return;
+      const rows = Math.max(0, Number(hydration.rows || hydration.initialRows || 0));
+      const totalRows = Math.max(rows, Number(hydration.totalRows || 0));
+      const durationMs = hydration.status === 'ready'
+        ? Number(hydration.durationMs || 0)
+        : Math.max(0, Date.now() - Number(hydration.startedAt || Date.now()));
+      const durationLabel = formatTableLoadDuration(durationMs);
+      const label = node.querySelector('span');
+      node.hidden = false;
+      node.classList.toggle('loading', !!active);
+      node.classList.toggle('complete', hydration.status === 'ready');
+      node.classList.toggle('retrying', hydration.status === 'retrying');
+      if (label) {
+        label.textContent = hydration.status === 'ready'
+          ? hydration.source === 'localStorage'
+            ? `Loaded ${rows} rows from cache in ${durationLabel}`
+            : `Loaded ${rows} rows in ${durationLabel}`
+          : hydration.status === 'retrying'
+          ? `Loading data ${rows}/${totalRows} - retrying - ${durationLabel}`
+          : `Loading data ${rows}/${totalRows} - ${durationLabel}`;
+      }
+      if (active && !state.tableHydrationTicker) {
+        state.tableHydrationTicker = window.setInterval(refreshTableHydrationIndicator, 500);
+      } else if (!active && state.tableHydrationTicker) {
+        window.clearInterval(state.tableHydrationTicker);
+        state.tableHydrationTicker = null;
+      }
+    }
+
+    function formatTableLoadDuration(durationMs) {
+      const value = Math.max(0, Number(durationMs || 0));
+      if (value < 1000) return `${Math.round(value)}ms`;
+      return `${(value / 1000).toFixed(1)}s`;
+    }
+
+    function renderSmartFilterControl(headers) {
+      if (state.tableDataLoading) {
+        return `
+          <div class="filter-menu filter-menu-loading" role="status" aria-live="polite">
+            ${ICONS.filter || ICONS.sliders}<span>Loading data...</span><i aria-hidden="true"></i>
+          </div>
+        `;
+      }
+      const filterHeaders = getSmartFilterHeaders(headers);
+      const activeCount = getActiveFilterValueCount();
+      const hasActive = activeCount > 0;
+      const filterSearchQuery = state.filterSearchQuery || '';
+      return `
+        <details class="filter-menu" ${state.filterMenuOpen ? 'open' : ''}>
+          <summary class="${hasActive ? 'active' : ''}" title="Filter records" aria-label="Filter records">
+            ${ICONS.filter || ICONS.sliders}<span>Filter</span>${hasActive ? `<strong>${activeCount}</strong>` : ''}
+          </summary>
+          <div class="filter-menu-panel">
+            ${renderActiveFilterChips()}
+            <div class="filter-search-row">
+              <label class="filter-search-box">
+                ${ICONS.search || ICONS.filter}
+                <input type="search" data-filter-search placeholder="Search filters" value="${escapeAttr(filterSearchQuery)}" autocomplete="off">
+              </label>
+              <button class="filter-search-clear" type="button" data-clear-filter-search title="Clear search" aria-label="Clear search" ${filterSearchQuery ? '' : 'disabled'}>&times;</button>
+            </div>
+            ${filterHeaders.length ? filterHeaders.map(renderSmartFilterGroup).join('') : '<div class="filter-empty">No smart filters for this table</div>'}
+          </div>
+        </details>
+      `;
+    }
+
+    function renderActiveFilterChips() {
+      const filters = state.tableFilters || {};
+      const chips = Object.keys(filters).flatMap((header) => {
+        const values = Array.isArray(filters[header]) ? filters[header] : [];
+        return values.map((value) => `
+          <button class="filter-chip" type="button" data-remove-filter-header="${escapeAttr(header)}" data-remove-filter-value="${escapeAttr(value)}">
+            <span>${escapeHtml(getFieldLabel(header))}</span>
+            <strong>${escapeHtml(value || 'Blank')}</strong>
+            <em>×</em>
+          </button>
+        `);
+      });
+      if (!chips.length) return '';
+      return `
+        <div class="filter-active-row">
+          <div class="filter-chip-list">${chips.join('')}</div>
+          <button class="filter-clear-all" type="button" data-clear-table-filters>Clear</button>
+        </div>
+      `;
+    }
+
+    function renderSmartFilterGroup(header) {
+      const options = getSmartFilterOptions(header);
+      if (!options.length) return '';
+      const selected = new Set((state.tableFilters && state.tableFilters[header]) || []);
+      const isOpen = isSmartFilterGroupOpen(header, options, selected);
+      const renderedOptions = isOpen ? options : [];
+      const groupSearchText = getFilterSearchText([header, getFieldLabel(header)].concat(options.map((option) => option.value)));
+      const labelSearchText = getFilterSearchText([header, getFieldLabel(header)]);
+      return `
+        <details class="filter-group" data-filter-group="${escapeAttr(header)}" data-filter-options-loaded="${isOpen ? '1' : '0'}" data-filter-search="${escapeAttr(groupSearchText)}" data-filter-label="${escapeAttr(labelSearchText)}" ${isOpen ? 'open' : ''}>
+          <summary>
+            <span class="filter-group-icon">${isOpen ? ICONS.chevronDown : ICONS.chevronRight}</span>
+            <strong>${escapeHtml(getFieldLabel(header))}</strong>
+            <em>${options.length}</em>
+            ${selected.size ? `<button type="button" data-clear-filter-field="${escapeAttr(header)}">Clear</button>` : ''}
+          </summary>
+          <div class="filter-options">
+            ${renderedOptions.map((option) => `
+              <label class="filter-option ${selected.has(option.value) ? 'checked' : ''}" data-filter-option data-filter-search="${escapeAttr(getFilterSearchText([header, getFieldLabel(header), option.value]))}">
+                <input type="checkbox" data-filter-checkbox data-filter-header="${escapeAttr(header)}" data-filter-value="${escapeAttr(option.value)}" ${selected.has(option.value) ? 'checked' : ''}>
+                <span>${escapeHtml(option.value || 'Blank')}</span>
+                <em>${option.count}</em>
+              </label>
+            `).join('')}
+          </div>
+        </details>
+      `;
+    }
+
+    function isSmartFilterGroupOpen(header, options, selected) {
+      if (selected && selected.size) return true;
+      const query = getFilterSearchText([state.filterSearchQuery || '']);
+      if (query) {
+        const text = getFilterSearchText([header, getFieldLabel(header)].concat((options || []).map((option) => option.value)));
+        return text.indexOf(query) >= 0;
+      }
+      return !!(state.expandedFilterGroups && state.expandedFilterGroups[header]);
+    }
+
+    function getFilterSearchText(values) {
+      return (values || [])
+        .map((value) => String(value == null ? '' : value).toLowerCase())
+        .join(' ')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim();
+    }
+
+    function getSmartFilterHeaders(headers) {
+      const cacheKey = `headers:${state.activeTableKey || ''}:${state.tableDataVersion || 0}:${(headers || []).join('|')}`;
+      state.filterOptionsCache = state.filterOptionsCache || {};
+      if (state.filterOptionsCache[cacheKey]) return state.filterOptionsCache[cacheKey];
+      const rows = state.tableData ? state.tableData.rows || [] : [];
+      const fieldMap = normalizeFormFields(state.tableData ? state.tableData.fields || [] : [])
+        .reduce((acc, field) => {
+          acc[field.name] = field;
+          return acc;
+        }, {});
+      const configuredHeaders = getConfiguredFilterHeaders(headers);
+      if (configuredHeaders.length) {
+        const result = configuredHeaders.filter((header) => {
+          if (!header) return false;
+          if (fieldMap[header] && fieldMap[header].groupable === false) return false;
+          return rows.some((row) => String(row.record[header] || '').trim());
+        }).slice(0, 12);
+        state.filterOptionsCache[cacheKey] = result;
+        return result;
+      }
+      const result = (headers || []).filter((header, index) => {
+        if (!header) return false;
+        if (fieldMap[header] && fieldMap[header].groupable === false) return false;
+        if (/^id$|_id$|uuid|code$/i.test(header)) return false;
+        if (/photo|image|thumbnail|avatar|picture|note|detail|description|summary|comment|address|url|link|email|phone/i.test(header)) return false;
+        const values = new Set(rows.map((row) => String(row.record[header] || '').trim()).filter(Boolean));
+        if (!values.size) return false;
+        if (/status|stage|category|type|group|owner|team|department|channel|priority/i.test(header)) return values.size <= 40;
+        if (index === 0) return false;
+        return values.size <= Math.max(8, Math.min(28, Math.ceil(rows.length * 0.35)));
+      }).slice(0, 8);
+      state.filterOptionsCache[cacheKey] = result;
+      return result;
+    }
+
+    function getSmartFilterOptions(header) {
+      const cacheKey = `options:${state.activeTableKey || ''}:${state.tableDataVersion || 0}:${header}`;
+      state.filterOptionsCache = state.filterOptionsCache || {};
+      if (state.filterOptionsCache[cacheKey]) return state.filterOptionsCache[cacheKey];
+      const counts = {};
+      (state.tableData && state.tableData.rows || []).forEach((row) => {
+        const value = String(row.record[header] || '').trim();
+        if (!value) return;
+        counts[value] = (counts[value] || 0) + 1;
+      });
+      const result = Object.keys(counts)
+        .sort((a, b) => counts[b] - counts[a] || a.localeCompare(b, 'vi', { numeric: true }))
+        .map((value) => ({ value, count: counts[value] }));
+      state.filterOptionsCache[cacheKey] = result;
+      return result;
+    }
+
+    function getActiveFilterValueCount() {
+      return Object.keys(state.tableFilters || {}).reduce((sum, header) => {
+        const values = state.tableFilters[header];
+        return sum + (Array.isArray(values) ? values.length : 0);
+      }, 0);
+    }
+
+    function getEnabledTableViewTypes() {
+      const configured = getViewsForActiveTable().map((view) => view.type).filter(Boolean);
+      const types = configured.length ? configured : ['table', 'detail'];
+      if (!types.includes(state.tableViewMode)) state.tableViewMode = types[0] || 'table';
+      return [...new Set(types)];
+    }
+
+    function renderTableViewSwitcher(viewTypes) {
+      const labels = { table: 'Table view', detail: 'List detail view', card: 'Card view', form: 'Form view' };
+      const icons = { table: ICONS.table, detail: ICONS.masterDetail, card: ICONS.layers, form: ICONS.settings };
+      return `
+        <div class="view-switcher" role="group" aria-label="Table view">
+          ${viewTypes.map((type) => `
+            <button class="view-switch ${state.tableViewMode === type ? 'active' : ''}" type="button" data-table-view="${escapeAttr(type)}" title="${escapeAttr(labels[type] || type)}" aria-label="${escapeAttr(labels[type] || type)}">
+              ${icons[type] || ICONS.table}
+            </button>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    function renderSortControl(headers) {
+      const options = getSortableHeaders(headers);
+      if (!options.length) return '';
+      const activeHeader = state.sort && state.sort.header ? state.sort.header : '';
+      const direction = state.sort && Number(state.sort.direction || 1) < 0 ? -1 : 1;
+      const activeLabel = activeHeader ? getFieldLabel(activeHeader) : '';
+      return `
+        <details class="sort-menu">
+          <summary class="${activeHeader ? 'active' : ''}" title="Sort records" aria-label="Sort records">
+            ${ICONS.sort || ICONS.sliders}<span>Sort</span>${activeHeader ? `<strong>${escapeHtml(activeLabel)}</strong><em>${direction < 0 ? 'Z-A' : 'A-Z'}</em>` : ''}
+          </summary>
+          <div class="sort-menu-panel">
+            ${activeHeader ? `<button class="sort-clear" type="button" data-clear-sort>Clear sort</button>` : ''}
+            <div class="sort-option-list">
+              ${options.map((header) => {
+                const active = header === activeHeader;
+                const nextDirection = active ? direction * -1 : 1;
+                return `
+                  <button class="sort-option ${active ? 'active' : ''}" type="button" data-sort-field="${escapeAttr(header)}" data-sort-direction="${nextDirection}">
+                    <span>${escapeHtml(getFieldLabel(header))}</span>
+                    <em>${active ? (direction < 0 ? 'Z-A' : 'A-Z') : 'A-Z'}</em>
+                  </button>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        </details>
+      `;
+    }
+
+    function getSortableHeaders(headers) {
+      return (headers || []).filter((header) => {
+        const key = normalizeClientConfigKey(header);
+        if (!key) return false;
+        if (/photo|image|thumbnail|avatar|picture|file|attachment|note|detail|description|summary|comment|url|link/i.test(header)) return false;
+        return true;
+      });
+    }
+
+    function renderTableControlStrip(groupFields, stats) {
+      return `
+          <div class="table-control-strip">
+            <div class="group-dropzone ${groupFields.length ? 'has-groups' : ''}" data-group-drop>
+              <span class="group-drop-label">${groupFields.length ? 'Grouped by' : 'Drag a column header here to group'}</span>
+              ${groupFields.map((field) => `
+                <button class="group-chip" type="button" data-remove-group="${escapeAttr(field)}">
+                  ${escapeHtml(field)}<span>×</span>
+                </button>
+              `).join('')}
+            </div>
+            <div class="table-stats">
+              <span><strong>${stats.visible}</strong> visible</span>
+              <span><strong>${stats.fields}</strong> fields</span>
+              <span><strong>${stats.statusGroups}</strong> statuses</span>
+              ${groupFields.length ? `<button class="clear-grouping" type="button" data-clear-grouping>Clear</button>` : ''}
+            </div>
+          </div>
+      `;
+    }
+
+    function renderTableGrid(headers, rows, groupFields) {
+      return `
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  ${headers.map(renderHeaderCell).join('')}
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${renderTableBody(headers, rows, groupFields)}
+              </tbody>
+            </table>
+          </div>
+      `;
+    }
+
+    function renderCardView(headers, rows, groupFields) {
+      if (!rows.length) {
+        return `<div class="table-card-empty empty"><div><h3>No records</h3><p>Không có dòng phù hợp với bộ lọc hiện tại.</p></div></div>`;
+      }
+      if (!groupFields.length) return `<div class="table-card-grid">${rows.map((row) => renderDataCard(headers, row)).join('')}</div>`;
+      prepareInitialCollapsedGroups(rows, groupFields, tableGroupCollapseKey);
+      keepMissingDefaultGroupsCollapsed(rows, groupFields, tableGroupCollapseKey);
+      return renderGroupedCards(headers, rows, groupFields, 0, []);
+    }
+
+    function renderGroupedCards(headers, rows, groupFields, depth, path) {
+      const field = groupFields[depth];
+      const groups = groupRowsByField(rows, field);
+      return getSortedGroupValues(groups, field).map((groupValue) => {
+        const groupRows = groups[groupValue];
+        if (isBlankGroupValue(groupValue)) {
+          return depth + 1 < groupFields.length
+            ? renderGroupedCards(headers, groupRows, groupFields, depth + 1, path)
+            : `<div class="table-card-grid">${groupRows.map((row) => renderDataCard(headers, row)).join('')}</div>`;
+        }
+        const groupPath = path.concat(`${field}:${groupValue}`);
+        const key = tableGroupCollapseKey(groupPath);
+        const collapsed = !!state.collapsedTableGroups[key];
+        return `
+          <section class="table-card-group">
+            <button class="table-card-group-title" type="button" data-toggle-table-group="${escapeAttr(key)}" style="padding-left:${12 + depth * 18}px">
+              <span>${collapsed ? ICONS.chevronRight : ICONS.chevronDown}</span>
+              <strong>${escapeHtml(groupValue || '-')}</strong>
+              <em>${groupRows.length} rows</em>
+            </button>
+            ${collapsed ? '' : (depth + 1 < groupFields.length
+              ? renderGroupedCards(headers, groupRows, groupFields, depth + 1, groupPath)
+              : `<div class="table-card-grid">${groupRows.map((row) => renderDataCard(headers, row)).join('')}</div>`)}
+          </section>
+        `;
+      }).join('');
+    }
+
+    function groupRowsByField(rows, field) {
+      return (rows || []).reduce((acc, row) => {
+        const value = getGroupBucketValue(row, field);
+        if (!acc[value]) acc[value] = [];
+        acc[value].push(row);
+        return acc;
+      }, {});
+    }
+
+    function getGroupBucketValue(row, field) {
+      const value = row && row.record ? row.record[field] : '';
+      return isBlankGroupValue(value) ? '' : String(value);
+    }
+
+    function isBlankGroupValue(value) {
+      return String(value == null ? '' : value).trim() === '';
+    }
+
+    function getSortedGroupValues(groups, field) {
+      const sort = state.sort || {};
+      const sortDirection = sort.header === field && Number(sort.direction || 1) < 0 ? -1 : 1;
+      return Object.keys(groups || {}).sort((a, b) => {
+        if (isBlankGroupValue(a) && !isBlankGroupValue(b)) return 1;
+        if (!isBlankGroupValue(a) && isBlankGroupValue(b)) return -1;
+        return a.localeCompare(b, 'vi', { numeric: true }) * sortDirection;
+      });
+    }
+
+    function prepareInitialCollapsedGroups(rows, groupFields, keyBuilder) {
+      if (!state.defaultGroupCollapsePending || !groupFields.length || typeof keyBuilder !== 'function') return;
+      const signature = [
+        state.activeTableKey || '',
+        state.tableViewMode || '',
+        state.tableDataVersion || 0,
+        groupFields.join('|'),
+        (rows || []).length,
+        keyBuilder.name || 'group',
+      ].join('\u001f');
+      if (state.defaultGroupCollapseSignature === signature) {
+        state.defaultGroupCollapsePending = false;
+        return;
+      }
+      const keys = collectInitialGroupCollapseKeys(rows, groupFields, keyBuilder, 0, []);
+      if (keys.length) {
+        const collapsed = Object.assign({}, state.collapsedTableGroups || {});
+        keys.forEach((key) => {
+          collapsed[key] = true;
+        });
+        state.collapsedTableGroups = collapsed;
+      }
+      state.defaultGroupCollapseSignature = signature;
+      state.defaultGroupCollapsePending = false;
+    }
+
+    function keepMissingDefaultGroupsCollapsed(rows, groupFields, keyBuilder) {
+      if (!state.defaultGroupCollapseSignature || !groupFields.length || typeof keyBuilder !== 'function') return;
+      const keys = collectInitialGroupCollapseKeys(rows, groupFields, keyBuilder, 0, []);
+      if (!keys.length) return;
+      const collapsed = Object.assign({}, state.collapsedTableGroups || {});
+      let changed = false;
+      keys.forEach((key) => {
+        if (!Object.prototype.hasOwnProperty.call(collapsed, key)) {
+          collapsed[key] = true;
+          changed = true;
+        }
+      });
+      if (changed) state.collapsedTableGroups = collapsed;
+    }
+
+    function collectInitialGroupCollapseKeys(rows, groupFields, keyBuilder, depth, path) {
+      const field = groupFields[depth];
+      const groups = groupRowsByField(rows, field);
+      return getSortedGroupValues(groups, field).reduce((keys, value) => {
+        const groupRows = groups[value] || [];
+        if (isBlankGroupValue(value)) {
+          if (depth < groupFields.length - 1) {
+            return keys.concat(collectInitialGroupCollapseKeys(groupRows, groupFields, keyBuilder, depth + 1, path));
+          }
+          return keys;
+        }
+        const groupPath = path.concat(`${field}:${value}`);
+        const groupKey = keyBuilder(groupPath);
+        const childKeys = depth < groupFields.length - 1
+          ? collectInitialGroupCollapseKeys(groupRows, groupFields, keyBuilder, depth + 1, groupPath)
+          : [];
+        return keys.concat(groupKey, childKeys);
+      }, []);
+    }
+
+    function renderDeleteButton(rowNumber, className) {
+      if (Number(rowNumber) < 0) return '';
+      if (!canDeleteRows()) return '';
+      const pending = typeof isRecordDeletePending === 'function' && isRecordDeletePending(state.activeTableKey, rowNumber);
+      return `
+        <button class="${className} row-delete-btn ${pending ? 'confirm' : ''}" type="button"
+          data-delete-row="${rowNumber}" data-delete-table="${escapeAttr(state.activeTableKey)}"
+          aria-label="Delete record" aria-pressed="${pending ? 'true' : 'false'}" title="Delete record">
+          ${ICONS.trash}
+        </button>
+      `;
+    }
+
+    function renderDuplicateButton(rowNumber, className) {
+      if (Number(rowNumber) < 0) return '';
+      if (!state.tableData || (state.tableData.table && state.tableData.table.readOnly)) return '';
+      if (!canSaveRecord(null)) return '';
+      return `
+        <button class="${className} row-duplicate-btn" type="button"
+          data-duplicate-row="${rowNumber}"
+          aria-label="Duplicate record" title="Duplicate record">
+          ${ICONS.copy}
+        </button>
+      `;
+    }
+
+    function renderDataCard(headers, row) {
+      const imageHeader = headers.find((header) => /photo|image|thumbnail|avatar|picture/i.test(header));
+      const imageCandidate = getCardImagePreviewCandidate(imageHeader, row && row.record ? row.record[imageHeader] : '');
+      const title = getRowTitle(headers, row);
+      const allowEdit = canEditRows() && Number(row.rowNumber) >= 0;
+      const deleteButton = renderDeleteButton(row.rowNumber, 'table-data-card-action');
+      const duplicateButton = renderDuplicateButton(row.rowNumber, 'table-data-card-action');
+      const primaryHeader = headers[0];
+      const previewFields = headers
+        .filter((header) => header !== imageHeader && header !== primaryHeader && row.record[header] !== '')
+        .filter((header) => !/note|detail|description|summary|comment|url|link/i.test(header))
+        .slice(0, 3);
+      return `
+        <article class="table-data-card ${row.pendingSave ? 'pending-save-row' : ''}">
+          ${(allowEdit || duplicateButton || deleteButton) ? `
+          <div class="table-data-card-actions">
+            ${allowEdit ? `
+            <button class="table-data-card-action table-data-card-edit" type="button" data-edit-row="${row.rowNumber}" aria-label="Edit record" title="Edit">
+              ${ICONS.edit || ICONS.advancedEdit}
+            </button>
+            ` : ''}
+            ${duplicateButton}
+            ${deleteButton}
+          </div>
+          ` : ''}
+          ${imageCandidate ? `
+            <button class="table-data-card-media" type="button" data-select-master-row="${row.rowNumber}">
+              <img src="${escapeAttr(imageCandidate.previewUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-preview-index="0" data-card-preview-urls="${escapeAttr(imageCandidate.previewUrls.join('\n'))}">
+            </button>
+          ` : ''}
+          <div class="table-data-card-body">
+            <button class="table-data-card-title" type="button" data-select-master-row="${row.rowNumber}">${escapeHtml(title)}</button>
+            <div class="table-data-card-fields">
+              ${previewFields.map((header) => `
+                <div class="table-data-card-field">
+                  <span>${escapeHtml(getFieldLabel(header))}</span>
+                  <strong>${escapeHtml(row.record[header] || '-')}</strong>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </article>
+      `;
+    }
+
+    function getCardImagePreviewCandidate(field, value) {
+      if (!field || !value) return null;
+      const url = typeof extractImagePreviewUrl === 'function'
+        ? extractImagePreviewUrl(value)
+        : String(value || '').trim();
+      if (!url) return null;
+      const imageLike = typeof isImageFieldName === 'function' ? isImageFieldName(field) : /photo|image|thumbnail|avatar|picture/i.test(field);
+      const urlLike = typeof isLikelyImageUrl === 'function' ? isLikelyImageUrl(url) : /^https?:\/\//i.test(url);
+      if (!imageLike && !urlLike) return null;
+      const urls = typeof getImagePreviewUrls === 'function' ? getImagePreviewUrls(url) : [url];
+      return {
+        field,
+        url,
+        previewUrl: urls[0] || url,
+        previewUrls: urls.length ? urls : [url],
+      };
+    }
+
+    function renderMasterDetailView(headers, rows, groupFields, stats) {
+      if (groupFields.length) prepareInitialCollapsedGroups(rows, groupFields, masterGroupCollapseKey);
+      const selected = getSelectedDetailRow(rows);
+      return `
+        <div class="master-detail-view">
+          <aside class="master-pane">
+            <div class="master-toolbar">
+              <details class="group-menu">
+                <summary>${ICONS.sliders}<span>Group</span>${groupFields.length ? `<strong>${groupFields.length}</strong>` : ''}</summary>
+                <div class="group-menu-panel">
+                  ${renderGroupCheckboxes(headers, groupFields)}
+                </div>
+              </details>
+              <div class="master-count"><strong>${stats.visible}</strong><span>visible</span></div>
+              ${groupFields.length ? `<button class="clear-grouping master-clear" type="button" data-clear-grouping>Clear</button>` : ''}
+            </div>
+            <div class="master-list">
+              ${renderMasterList(headers, rows, groupFields, selected)}
+            </div>
+          </aside>
+          <section class="detail-pane">
+            ${selected ? renderDetailRecord(headers, selected) : renderNoDetail()}
+          </section>
+        </div>
+      `;
+    }
+
+    function renderGroupCheckboxes(headers, groupFields) {
+      const activeGroups = (groupFields || []).filter((header) => headers.includes(header));
+      const options = [...new Set([...(groupFields || []), ...getGroupableHeaders(headers)])]
+        .filter((header) => headers.includes(header));
+      const orderList = activeGroups.length ? `
+        <div class="group-order-list">
+          <div class="group-section-label">Group order</div>
+          ${activeGroups.map((header, index) => `
+            <div class="group-order-row">
+              <span class="group-order-index">${index === 0 ? 'Parent' : `Level ${index + 1}`}</span>
+              <strong>${escapeHtml(getFieldLabel(header))}</strong>
+              <div class="group-order-actions">
+                <button type="button" data-move-group="${escapeAttr(header)}" data-move-group-direction="-1" ${index === 0 ? 'disabled' : ''} aria-label="Move group up">${ICONS.chevronDown.replace('m6 9 6 6 6-6', 'm18 15-6-6-6 6')}</button>
+                <button type="button" data-move-group="${escapeAttr(header)}" data-move-group-direction="1" ${index === activeGroups.length - 1 ? 'disabled' : ''} aria-label="Move group down">${ICONS.chevronDown}</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      ` : '';
+      const optionList = options.map((header) => `
+        <label class="group-option">
+          <input type="checkbox" data-group-checkbox="${escapeAttr(header)}" ${groupFields.includes(header) ? 'checked' : ''}>
+          <span>${escapeHtml(getFieldLabel(header))}</span>
+        </label>
+      `).join('');
+      return `${orderList}${optionList ? '<div class="group-section-label">Fields</div>' + optionList : '<div class="group-empty">No grouping fields</div>'}`;
+    }
+
+    function getGroupableHeaders(headers) {
+      const rows = state.tableData ? state.tableData.rows : [];
+      const fieldMap = normalizeFormFields(state.tableData ? state.tableData.fields || [] : [])
+        .reduce((acc, field) => {
+          acc[field.name] = field;
+          return acc;
+        }, {});
+      return headers.filter((header, index) => {
+        if (fieldMap[header] && fieldMap[header].groupable === false) return false;
+        if (/^id$|_id$/i.test(header)) return false;
+        if (/note|detail|description|summary|comment|address|url|email|phone/i.test(header)) return false;
+        const values = new Set(rows.map((row) => row.record[header]).filter(Boolean));
+        return values.size > 0 && values.size <= Math.max(12, Math.ceil(rows.length * 0.7));
+      }).slice(0, 10);
+    }
+
+    function renderMasterList(headers, rows, groupFields, selected) {
+      if (!rows.length) {
+        return `<div class="master-empty"><h3>No records</h3><p>Adjust search or filters to see records.</p></div>`;
+      }
+      if (!groupFields.length) {
+        return rows.map((row) => renderMasterListItem(headers, row, selected)).join('');
+      }
+      prepareInitialCollapsedGroups(rows, groupFields, masterGroupCollapseKey);
+      keepMissingDefaultGroupsCollapsed(rows, groupFields, masterGroupCollapseKey);
+      return renderGroupedMasterList(headers, rows, groupFields, selected, 0, []);
+    }
+
+    function renderGroupedMasterList(headers, rows, groupFields, selected, depth, path) {
+      const field = groupFields[depth];
+      const groups = rows.reduce((acc, row) => {
+        const value = getGroupBucketValue(row, field);
+        if (!acc[value]) acc[value] = [];
+        acc[value].push(row);
+        return acc;
+      }, {});
+      return getSortedGroupValues(groups, field).map((value) => {
+        const groupRows = groups[value];
+        if (isBlankGroupValue(value)) {
+          return depth < groupFields.length - 1
+            ? renderGroupedMasterList(headers, groupRows, groupFields, selected, depth + 1, path)
+            : groupRows.map((row) => renderMasterListItem(headers, row, selected)).join('');
+        }
+        const groupPath = path.concat(`${field}:${value}`);
+        const groupKey = masterGroupCollapseKey(groupPath);
+        const collapsed = !!state.collapsedTableGroups[groupKey];
+        const children = collapsed ? '' : depth < groupFields.length - 1
+          ? renderGroupedMasterList(headers, groupRows, groupFields, selected, depth + 1, groupPath)
+          : groupRows.map((row) => renderMasterListItem(headers, row, selected)).join('');
+        return `
+          <div class="master-group" style="--depth:${depth}">
+            <button class="master-group-toggle" type="button" data-toggle-table-group="${escapeAttr(groupKey)}" aria-expanded="${!collapsed}">
+              <span>${collapsed ? ICONS.chevronRight : ICONS.chevronDown}</span>
+              <strong>${escapeHtml(value)}</strong>
+              <small>${groupRows.length}</small>
+            </button>
+            ${children}
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderMasterListItem(headers, row, selected) {
+      const title = getRowTitle(headers, row);
+      const active = selected && selected.rowNumber === row.rowNumber;
+      return `
+        <button class="master-item ${active ? 'active' : ''} ${row.pendingSave ? 'pending-save-row' : ''}" type="button" data-select-master-row="${row.rowNumber}">
+          <span class="master-item-title">${escapeHtml(title)}</span>
+        </button>
+      `;
+    }
+
+    function renderDetailRecord(headers, row) {
+      const title = getRowTitle(headers, row);
+      const allowEdit = canEditRows() && Number(row.rowNumber) >= 0;
+      const deleteButton = renderDeleteButton(row.rowNumber, 'row-icon-btn');
+      const duplicateButton = renderDuplicateButton(row.rowNumber, 'row-icon-btn');
+      const viewConfig = getActiveViewConfig() || {};
+      const formConfig = getActiveFormConfig({ columns: 2 }, 'full');
+      const detailConfig = getDetailDisplayConfig(viewConfig, formConfig);
+      const formFields = prioritizeImageFields(
+        applyFormFieldOrder(normalizeFormFields(headers), detailConfig).filter((field) => !field.hidden),
+        row.record
+      );
+      const visibleHeaders = (detailConfig.showEmptyFields === false
+        ? formFields.filter((field) => row.record[field.name] !== '')
+        : formFields).map((field) => field.name);
+      const columnCount = Math.max(1, Math.min(3, Number(detailConfig.columns || 2)));
+      const sections = getDetailViewSections(detailConfig, visibleHeaders);
+      return `
+        <div class="detail-header">
+          <div>
+            <span class="detail-kicker">Selected record</span>
+            <h3>${escapeHtml(title)}</h3>
+          </div>
+          <div class="detail-actions">
+            ${allowEdit ? `
+            <button class="btn row-edit-btn" type="button" data-edit-row="${row.rowNumber}">Edit</button>
+            <button class="row-icon-btn" type="button" data-advanced-edit-row="${row.rowNumber}" aria-label="Full form" title="Full form">
+              ${ICONS.advancedEdit}
+            </button>
+            ` : ''}
+            ${getActiveAiInsightConfig(headers).enabled ? `<button class="row-icon-btn" type="button" data-ai-insight-view title="Copy AI context" aria-label="Copy AI context">${ICONS.sparkles}</button>` : ''}
+            ${duplicateButton}
+            ${deleteButton}
+          </div>
+        </div>
+        ${sections.length
+          ? renderDetailSections(sections, row, columnCount)
+          : `<div class="detail-grid detail-masonry" style="grid-template-columns:repeat(${columnCount}, minmax(0, 1fr))">
+              ${Array.from({ length: columnCount }, (_, index) => renderDetailColumn(visibleHeaders, row, index, columnCount)).join('')}
+            </div>`}
+        ${renderNestedTables(formConfig, row.record)}
+      `;
+    }
+
+    function getDetailDisplayConfig(viewConfig, formConfig) {
+      const view = viewConfig || {};
+      const form = formConfig || {};
+      const hasViewList = (key) => Array.isArray(view[key]) && view[key].length;
+      return Object.assign({}, form, {
+        columns: view.columns || form.columns || 2,
+        columnOrder: hasViewList('columnOrder') ? view.columnOrder : (form.columnOrder || []),
+        hiddenColumns: hasViewList('hiddenColumns') ? view.hiddenColumns : (form.hiddenColumns || []),
+        sections: hasViewList('sections') ? view.sections : (form.sections || []),
+        showEmptyFields: Object.prototype.hasOwnProperty.call(view, 'showEmptyFields') ? view.showEmptyFields : form.showEmptyFields,
+      });
+    }
+
+    function getDetailViewSections(viewConfig, visibleHeaders) {
+      const sections = Array.isArray(viewConfig && viewConfig.sections) ? viewConfig.sections : [];
+      if (!sections.length) return [];
+      const byKey = (visibleHeaders || []).reduce((acc, header) => {
+        acc[normalizeClientConfigKey(header)] = header;
+        return acc;
+      }, {});
+      const mapped = sections.map((section, index) => {
+        const fields = (section.fields || [])
+          .map((field) => byKey[normalizeClientConfigKey(field)] || '')
+          .filter(Boolean);
+        return {
+          title: section.title || `Section ${index + 1}`,
+          fields,
+        };
+      }).filter((section) => section.fields.length);
+      return mapped;
+    }
+
+    function renderDetailSections(sections, row, columnCount) {
+      return `
+        <div class="detail-sections">
+          ${sections.map((section) => `
+            <section class="detail-section">
+              <div class="detail-section-title">${escapeHtml(section.title)}</div>
+              <div class="detail-section-grid" style="grid-template-columns:repeat(${columnCount}, minmax(0, 1fr))">
+                ${(section.fields || []).map((header) => renderDetailField(header, row)).join('')}
+              </div>
+            </section>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    function renderDetailColumn(headers, row, columnIndex, columnCount) {
+      return `
+        <div class="detail-column">
+          ${headers.filter((header, index) => index % columnCount === columnIndex).map((header) => renderDetailField(header, row)).join('')}
+        </div>
+      `;
+    }
+
+    function renderDetailField(header, row) {
+      const value = row.record[header] || '';
+      const isStatus = /status|stage/i.test(header);
+      const hasImagePreview = isImagePreviewField(header, value);
+      return `
+        <div class="detail-field ${/note|detail|description|summary|address/i.test(header) ? 'wide' : ''} ${hasImagePreview ? 'image-link-field' : ''}" data-detail-field="${escapeAttr(header)}">
+          <span>${escapeHtml(header)}</span>
+          <strong class="${value ? '' : 'empty-cell'}">${isStatus ? statusPill(value) : escapeHtml(value || '-')}</strong>
+        </div>
+      `;
+    }
+
+    function renderNoDetail() {
+      return `
+        <div class="master-empty detail-empty">
+          <h3>No record selected</h3>
+          <p>Select a row from the list to inspect details.</p>
+        </div>
+      `;
+    }
+
+    function renderNestedTables(formConfig, parentRecord) {
+      if (!formConfig || formConfig.nestedTablesExplicit !== true) return '';
+      const nested = (formConfig && formConfig.nestedTables) || [];
+      if (!nested.length) return '';
+      const cards = nested.map((name) => renderNestedTableCard(name, parentRecord)).filter(Boolean);
+      if (!cards.length) return '';
+      return `
+        <section class="nested-table-section">
+          <div class="nested-table-title">Nested tables</div>
+          <div class="nested-table-grid">
+            ${cards.join('')}
+          </div>
+        </section>
+      `;
+    }
+
+    function getNestedFormStepItems(formConfig, parentRecord) {
+      if (!formConfig || formConfig.nestedTablesExplicit !== true) return [];
+      const nested = (formConfig && formConfig.nestedTables) || [];
+      return nested.map((name, index) => {
+        const html = renderNestedTableCard(name, parentRecord);
+        if (!html) return null;
+        const table = findBootstrapTableByName(name);
+        const title = (table && (table.name || table.apiTableName || table.sheetName)) || name;
+        return {
+          id: getNestedFormStepDomId(name, index),
+          key: (table && table.key) || normalizeClientConfigKey(name) || `nested_${index + 1}`,
+          title,
+          html,
+        };
+      }).filter(Boolean);
+    }
+
+    function getNestedFormStepDomId(name, index) {
+      const title = normalizeClientConfigKey(name || `nested_${index + 1}`);
+      return `form-nested-${index + 1}-${title || 'table'}`;
+    }
+
+    function renderNestedFormStepSection(item) {
+      return `
+        <section class="form-section form-flow-nested-section" id="${escapeAttr(item.id)}" data-form-flow-nested-section data-nested-step-key="${escapeAttr(item.key)}">
+          <p class="form-section-title">Nested table</p>
+          ${item.html}
+        </section>
+      `;
+    }
+
+    function renderNestedTableCard(name, parentRecord) {
+      const table = findBootstrapTableByName(name);
+      if (!table || !table.key) {
+        return `
+          <article class="nested-table-card">
+            <strong>${escapeHtml(name)}</strong>
+            <span>Table not found</span>
+          </article>
+        `;
+      }
+      const data = table.key === state.activeTableKey && state.tableData
+        ? state.tableData
+        : state.dataCache[getTableRuntimeCacheKey(table.key)];
+      const relationship = getRelationshipForNestedTable(name);
+      if (!relationship) return '';
+      const allRows = data && data.rows ? data.rows : [];
+      const rows = filterRowsByRelationship(allRows, relationship, parentRecord);
+      const nestedViewConfig = getNestedFormViewConfig(table);
+      const headers = getNestedTablePreviewHeaders(data, nestedViewConfig);
+      const sourceValue = parentRecord ? parentRecord[relationship.sourceField] || '' : '';
+      const relationshipText = `${relationship.sourceField} = ${relationship.targetField}`;
+      return `
+        <article class="nested-table-card">
+          <div class="nested-table-card-head">
+            <div>
+              <strong>${escapeHtml(table.name || name)}</strong>
+              <span>${data ? `${rows.length} related records` : 'Loading records'}</span>
+            </div>
+            <div class="nested-table-actions">
+              <button class="nested-icon-btn" type="button" data-add-nested-row="${escapeAttr(table.key)}" data-nested-source-field="${escapeAttr(relationship.sourceField)}" data-nested-target-field="${escapeAttr(relationship.targetField)}" data-nested-source-value="${escapeAttr(sourceValue)}" title="Add related row" aria-label="Add related row">${ICONS.plus}</button>
+              <button class="nested-icon-btn" type="button" data-open-nested-table="${escapeAttr(table.key)}" title="Open table" aria-label="Open table">${ICONS.table}</button>
+            </div>
+          </div>
+          <div class="nested-relationship-note">${escapeHtml(relationshipText)}</div>
+          ${data ? `
+            <div class="nested-table-preview">
+              ${headers.length && rows.length ? `
+                <table class="nested-table-preview-table" style="min-width:${Math.max(520, headers.length * 132 + 56)}px">
+                  <thead>
+                    <tr>
+                      ${headers.map((header) => `<th>${escapeHtml(getNestedFieldLabel(data, header))}</th>`).join('')}
+                      <th aria-label="Action"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${rows.map((row) => `
+                      <tr>
+                        ${headers.map((header) => `<td>${escapeHtml(row.record[header] || '-')}</td>`).join('')}
+                        <td class="nested-table-action-cell">
+                          <button class="nested-icon-btn" type="button" data-open-nested-row="${escapeAttr(table.key)}" data-nested-row-number="${escapeAttr(row.rowNumber)}" title="Open row" aria-label="Open row">${ICONS.edit}</button>
+                        </td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              ` : '<p>No records</p>'}
+            </div>
+          ` : '<div class="nested-table-preview"><p>Preparing preview...</p></div>'}
+        </article>
+      `;
+    }
+
+    function getNestedFormViewConfig(table) {
+      if (!table || !table.key) return null;
+      const views = getUiConfig().views || {};
+      const byPageId = views.byPageId || {};
+      const byTableKey = views.byTableKey || {};
+      const pageViews = state.activeStep && state.activeStep.pageId ? byPageId[state.activeStep.pageId] || [] : [];
+      const tableViews = byTableKey[table.key] || [];
+      const nestedPageViews = pageViews.filter((view) => view && view.type === 'nested_form');
+      return nestedPageViews.find((view) => view.tableKey === table.key || normalizeClientConfigKey(view.tableName) === normalizeClientConfigKey(table.name || table.apiTableName || table.sheetName || ''))
+        || (tableViews || []).find((view) => view && view.type === 'nested_form')
+        || null;
+    }
+
+    function getNestedEditingFormConfig() {
+      const tableKey = state.editing && state.editing.tableKey;
+      if (!tableKey) return null;
+      const tables = state.bootstrap && state.bootstrap.tables ? state.bootstrap.tables : {};
+      const table = Object.keys(tables).reduce((found, key) => {
+        if (found) return found;
+        const candidate = tables[key] || {};
+        return key === tableKey || candidate.key === tableKey ? Object.assign({ key }, candidate) : null;
+      }, null);
+      const formConfig = getUiConfig().forms || {};
+      const pages = getUiConfig().pages || {};
+      const byPageId = formConfig.byPageId || {};
+      const page = findUiPageForTable(table || { key: tableKey }, pages);
+      const pageForms = page && page.id ? byPageId[page.id] : null;
+      const nestedForm = pageForms && (pageForms.nested || pageForms.related || pageForms.subform);
+      if (nestedForm) {
+        return {
+          columns: Number(nestedForm.columns || 2),
+          labelPosition: nestedForm.labelPosition || 'top',
+          showEmptyFields: nestedForm.showEmptyFields !== false,
+          formLayoutType: nestedForm.formLayoutType || nestedForm.formType || 'default',
+          columnOrder: nestedForm.columnOrder || [],
+          hiddenColumns: nestedForm.hiddenColumns || [],
+          sections: nestedForm.sections || [],
+        };
+      }
+      const viewConfig = getNestedFormViewConfig(table || { key: tableKey });
+      if (!viewConfig) return null;
+      return {
+        columns: Number(viewConfig.columns || 2),
+        labelPosition: viewConfig.labelPosition || 'top',
+        showEmptyFields: viewConfig.showEmptyFields !== false,
+        columnOrder: viewConfig.columnOrder || [],
+        hiddenColumns: viewConfig.hiddenColumns || [],
+        sections: viewConfig.sections || [],
+      };
+    }
+
+    function findUiPageForTable(table, pages) {
+      const byId = (pages && pages.byId) || {};
+      const targetKeys = [
+        table && table.key,
+        table && table.name,
+        table && table.apiTableName,
+        table && table.sheetName,
+      ].map(normalizeClientConfigKey).filter(Boolean);
+      return Object.keys(byId).map((pageId) => byId[pageId]).find((page) => {
+        if (!page) return false;
+        return [page.tableKey, page.tableName, page.id, page.label]
+          .map(normalizeClientConfigKey)
+          .some((value) => value && targetKeys.includes(value));
+      }) || null;
+    }
+
+    function getNestedTablePreviewHeaders(data, nestedViewConfig) {
+      if (!data || !Array.isArray(data.headers)) return [];
+      const fields = normalizeFormFields(data.fields || data.headers);
+      const configuredFields = nestedViewConfig
+        ? applyFormFieldOrder(fields, {
+          columnOrder: nestedViewConfig.columnOrder || [],
+          hiddenColumns: nestedViewConfig.hiddenColumns || [],
+        }).filter((field) => !field.hidden)
+        : fields;
+      const headers = configuredFields.map((field) => field.name).filter((header) => data.headers.includes(header));
+      return headers.length ? headers : data.headers.slice();
+    }
+
+    function getNestedFieldLabel(data, header) {
+      const fields = normalizeFormFields(data && data.fields ? data.fields : []);
+      const field = fields.find((item) => item.name === header);
+      return field && field.label ? field.label : getFieldLabel(header);
+    }
+
+    function loadNestedTablesForActiveForm() {
+      if (state.tableViewMode !== 'detail') return;
+      const formConfig = getActiveFormConfig();
+      return loadNestedTablesForConfig(formConfig, () => {
+        if (state.tableViewMode === 'detail') renderPage();
+      });
+    }
+
+    function loadNestedTablesForConfig(formConfig, onLoaded) {
+      const nested = (formConfig && formConfig.nestedTables) || [];
+      if (!nested.length) return false;
+      let requested = false;
+      nested.forEach((name) => {
+        const table = findBootstrapTableByName(name);
+        if (!table || !table.key || table.key === state.activeTableKey) return;
+        const cacheKey = getTableRuntimeCacheKey(table.key);
+        if (state.dataCache[cacheKey] || state.inFlight[cacheKey]) return;
+        requested = true;
+        fetchItemData({ tableKey: table.key }).then(() => {
+          if (typeof onLoaded === 'function') onLoaded(table.key);
+        }).catch(() => null);
+      });
+      return requested;
+    }
+
+    function getSelectedDetailRow(rows) {
+      const selected = rows.find((row) => row.rowNumber === state.detailRowNumber) || rows[0] || null;
+      state.detailRowNumber = selected ? selected.rowNumber : null;
+      return selected;
+    }
+
+    function getRowTitle(headers, row) {
+      const primaryHeader = getTitleColumnHeader(headers) || headers[0];
+      return row.record[primaryHeader] || row.id || `Row ${row.rowNumber}`;
+    }
+
+    function prioritizeTitleColumnHeader(headers) {
+      const titleHeader = getTitleColumnHeader(headers);
+      if (!titleHeader) return headers;
+      return [titleHeader].concat((headers || []).filter((header) => header !== titleHeader));
+    }
+
+    function getTitleColumnHeader(headers) {
+      const viewConfig = getActiveViewConfig();
+      const formConfig = getActiveFormConfig();
+      const pageConfig = getPageConfigForActiveTable();
+      const inheritedPageConfig = getInheritedPageConfigForActiveTable(pageConfig);
+      const configured = String((viewConfig && (viewConfig.titleColumn
+        || viewConfig.recordTitleColumn
+        || viewConfig.recordNameColumn
+        || viewConfig.displayNameColumn
+        || viewConfig.displayName
+        || viewConfig.displayField
+        || viewConfig.titleField))
+        || (pageConfig && (pageConfig.titleColumn
+        || pageConfig.recordTitleColumn
+        || pageConfig.recordNameColumn
+        || pageConfig.displayNameColumn
+        || pageConfig.displayName
+        || pageConfig.displayField
+        || pageConfig.titleField))
+        || (inheritedPageConfig && (inheritedPageConfig.titleColumn
+        || inheritedPageConfig.recordTitleColumn
+        || inheritedPageConfig.recordNameColumn
+        || inheritedPageConfig.displayNameColumn
+        || inheritedPageConfig.displayName
+        || inheritedPageConfig.displayField
+        || inheritedPageConfig.titleField))
+        || formConfig.mainDisplayName
+        || formConfig.mainDisplayField
+        || formConfig.displayName
+        || formConfig.displayField
+        || '').trim();
+      if (!configured) return '';
+
+      const fields = normalizeFormFields(state.tableData ? state.tableData.fields || [] : []);
+      const candidates = []
+        .concat(fields.map((field) => field.name))
+        .concat(headers || []);
+      const normalizedConfigured = normalizeClientConfigKey(configured);
+      const matchedHeader = candidates.find((candidate) => normalizeClientConfigKey(candidate) === normalizedConfigured);
+      if (matchedHeader) return matchedHeader;
+      const matchedField = fields.find((field) => normalizeClientConfigKey(field.label) === normalizedConfigured);
+      return matchedField ? matchedField.name : '';
+    }
+
+    function getInheritedPageConfigForActiveTable(currentPage) {
+      const pageConfig = (getUiConfig().pages || {});
+      const byId = pageConfig.byId || {};
+      const pages = Object.keys(byId).map((key) => byId[key]).filter((page) => page && page.tableKey === state.activeTableKey);
+      return pages.find((page) => page !== currentPage && (page.titleColumn || page.displayNameColumn || page.titleField)) || null;
+    }
+
+    function masterGroupCollapseKey(path) {
+      return `${state.activeTableKey || 'table'}::master::${path.join('>')}`;
+    }
+
+    function renderHeaderCell(header) {
+      return `
+        <th draggable="true" data-header="${escapeAttr(header)}">
+          <button class="th-btn" data-sort="${escapeAttr(header)}">${escapeHtml(getFieldLabel(header))}</button>
+        </th>
+      `;
+    }
+
+    function renderTableBody(headers, rows, groupFields) {
+      if (!rows.length) {
+        return `<tr><td colspan="${headers.length + 1}"><div class="empty table-empty"><div><h3>No records</h3><p>Không có dòng phù hợp với bộ lọc hiện tại.</p></div></div></td></tr>`;
+      }
+      if (!groupFields.length) return rows.map((row) => renderRow(headers, row)).join('');
+      prepareInitialCollapsedGroups(rows, groupFields, tableGroupCollapseKey);
+      keepMissingDefaultGroupsCollapsed(rows, groupFields, tableGroupCollapseKey);
+      return renderGroupedRows(headers, rows, groupFields, 0, []);
+    }
+
+    function renderGroupedRows(headers, rows, groupFields, depth, path) {
+      const field = groupFields[depth];
+      const groups = rows.reduce((acc, row) => {
+        const value = getGroupBucketValue(row, field);
+        if (!acc[value]) acc[value] = [];
+        acc[value].push(row);
+        return acc;
+      }, {});
+      return getSortedGroupValues(groups, field).map((value) => {
+        const groupRows = groups[value];
+        if (isBlankGroupValue(value)) {
+          return depth < groupFields.length - 1
+            ? renderGroupedRows(headers, groupRows, groupFields, depth + 1, path)
+            : groupRows.map((row) => renderRow(headers, row)).join('');
+        }
+        const groupPath = path.concat(`${field}:${value}`);
+        const groupKey = tableGroupCollapseKey(groupPath);
+        const collapsed = !!state.collapsedTableGroups[groupKey];
+        const children = collapsed ? '' : depth < groupFields.length - 1
+          ? renderGroupedRows(headers, groupRows, groupFields, depth + 1, groupPath)
+          : groupRows.map((row) => renderRow(headers, row)).join('');
+        return `
+          <tr class="table-group-row ${collapsed ? 'collapsed' : ''}">
+            <td colspan="${headers.length + 1}" style="padding-left:${12 + depth * 18}px">
+              <button class="table-group-toggle" type="button" data-toggle-table-group="${escapeAttr(groupKey)}" aria-expanded="${!collapsed}">
+                <span class="table-group-chevron">${collapsed ? ICONS.chevronRight : ICONS.chevronDown}</span>
+                <strong>${escapeHtml(value)}</strong>
+                <em>${groupRows.length} rows</em>
+              </button>
+            </td>
+          </tr>
+          ${children}
+        `;
+      }).join('');
+    }
+
+    function tableGroupCollapseKey(path) {
+      return `${state.activeTableKey || 'table'}::${path.join('>')}`;
+    }
+
+    function getActiveGroupFields(headers) {
+      return (state.tableGroupBy || []).filter((field) => headers.includes(field));
+    }
+
+    function addGroupField(header) {
+      if (!header || !state.tableData || !state.tableData.headers.includes(header)) return;
+      state.tableGroupBy = [...new Set([...(state.tableGroupBy || []), header])];
+      state.collapsedTableGroups = {};
+      clearDefaultGroupInitialCollapse();
+      renderPage();
+    }
+
+    function removeGroupField(header) {
+      state.tableGroupBy = (state.tableGroupBy || []).filter((field) => field !== header);
+      state.collapsedTableGroups = {};
+      clearDefaultGroupInitialCollapse();
+      renderPage();
+    }
+
+    function moveGroupField(header, direction) {
+      const groups = (state.tableGroupBy || []).slice();
+      const index = groups.indexOf(header);
+      const nextIndex = index + Number(direction || 0);
+      if (index < 0 || nextIndex < 0 || nextIndex >= groups.length) return;
+      [groups[index], groups[nextIndex]] = [groups[nextIndex], groups[index]];
+      state.tableGroupBy = groups;
+      state.collapsedTableGroups = {};
+      clearDefaultGroupInitialCollapse();
+      renderPage();
+    }
+
+    function toggleTableGroup(key) {
+      if (!key) return;
+      captureMasterListScroll();
+      state.collapsedTableGroups[key] = !state.collapsedTableGroups[key];
+      renderPage();
+    }
+
+    function makeTableStats(headers, rows, groupFields) {
+      const statusHeader = headers.find((header) => /status|stage/i.test(header));
+      const statuses = statusHeader
+        ? new Set(rows.map((row) => row.record[statusHeader]).filter(Boolean)).size
+        : 0;
+      return {
+        visible: rows.length,
+        fields: headers.length,
+        statusGroups: statuses,
+        grouped: groupFields.length,
+      };
+    }
+
+    function renderRow(headers, row) {
+      const allowEdit = canEditRows() && Number(row.rowNumber) >= 0;
+      const deleteButton = renderDeleteButton(row.rowNumber, 'row-icon-btn');
+      const duplicateButton = renderDuplicateButton(row.rowNumber, 'row-icon-btn');
+      return `
+        <tr class="${row.pendingSave ? 'pending-save-row' : ''}">
+          ${headers.map((header, index) => {
+            const value = row.record[header] || '';
+            const isStatus = /status|stage/i.test(header);
+            const cls = index === 0 ? 'primary-cell' : '';
+            const displayValue = value || '-';
+            return `<td class="${cls} ${value ? '' : 'empty-cell'}">${renderCellContent(displayValue, isStatus, value)}</td>`;
+          }).join('')}
+          <td>
+            <div class="row-actions">
+              ${allowEdit ? `
+              <button class="btn row-edit-btn" type="button" data-edit-row="${row.rowNumber}">Edit</button>
+              <button class="row-icon-btn" type="button" data-advanced-edit-row="${row.rowNumber}" aria-label="Full form" title="Full form">
+                ${ICONS.advancedEdit}
+              </button>
+              ` : ''}
+              ${duplicateButton}
+              ${deleteButton}
+            </div>
+          </td>
+        </tr>
+      `;
+    }
+
+    function renderCellContent(displayValue, isStatus, rawValue) {
+      if (isStatus) return statusPill(rawValue || displayValue);
+      return `<span class="cell-content" data-full-text="${escapeAttr(displayValue)}">${escapeHtml(displayValue)}</span>`;
+    }
+
+    function renderEmpty() {
+      return `
+        <section class="panel empty">
+          <div>
+            <h3>Step này chưa có CRUD table</h3>
+            <p>Navigation vẫn giữ đúng process, nhưng bước này chưa có native Google Sheets Table khớp với Table index.</p>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderClientAccessError(error) {
+      const message = error && error.message ? error.message : String(error || 'Access denied');
+      const quotaLimited = typeof isClientQuotaError === 'function' && isClientQuotaError(error);
+      el.pageTitle.textContent = quotaLimited ? 'Temporary limit' : 'Access required';
+      el.breadcrumb.textContent = quotaLimited ? 'Google Sheets quota' : 'Google Sheet permission';
+      el.content.innerHTML = `
+        <section class="panel empty">
+          <div>
+            <h3>${quotaLimited ? 'Google Sheets is temporarily busy' : 'Access required'}</h3>
+            <p>${quotaLimited
+              ? 'The app hit a short Google Sheets read limit. Wait a few seconds, then reload or try the action again.'
+              : 'This app uses the Google Sheet data file as the source of truth for access. Ask the sheet owner to share the file with your Google account, then reload this app.'}</p>
+            <p>${escapeHtml(message)}</p>
+          </div>
+        </section>
+      `;
+    }
+
+    function bindTableEvents() {
+      installFilterDismissHandlers();
+      const searchInput = document.getElementById('searchInput');
+      if (searchInput) {
+        searchInput.addEventListener('compositionstart', () => {
+          state.isSearchComposing = true;
+        });
+        searchInput.addEventListener('input', (event) => {
+          state.query = event.target.value;
+          if (state.isSearchComposing) return;
+          resetTablePage();
+          scheduleSearchRender(event.target);
+        });
+        searchInput.addEventListener('compositionend', (event) => {
+          state.isSearchComposing = false;
+          state.query = event.target.value;
+          resetTablePage();
+          scheduleSearchRender(event.target, 0);
+        });
+      }
+      const statusFilter = document.getElementById('statusFilter');
+      if (statusFilter) {
+        statusFilter.addEventListener('change', (event) => {
+          state.status = event.target.value;
+          resetTablePage();
+          updateDetailSelectionAfterFilters();
+          renderPagePreservingTableFocus();
+        });
+      }
+      const filterMenu = document.querySelector('.filter-menu');
+      if (filterMenu) {
+        filterMenu.addEventListener('toggle', () => {
+          state.filterMenuOpen = filterMenu.open;
+        });
+      }
+      const filterSearchInput = document.querySelector('[data-filter-search]');
+      if (filterSearchInput) {
+        filterSearchInput.addEventListener('input', () => {
+          state.filterMenuOpen = true;
+          state.filterSearchQuery = filterSearchInput.value || '';
+          applySmartFilterSearch();
+        });
+      }
+      const filterSearchClear = document.querySelector('[data-clear-filter-search]');
+      if (filterSearchClear) {
+        filterSearchClear.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          state.filterMenuOpen = true;
+          state.filterSearchQuery = '';
+          if (filterSearchInput) filterSearchInput.value = '';
+          applySmartFilterSearch();
+          if (filterSearchInput) filterSearchInput.focus();
+        });
+      }
+      document.querySelectorAll('[data-filter-group]').forEach((group) => {
+        group.addEventListener('toggle', () => {
+          const header = group.dataset.filterGroup || '';
+          if (!header || state.filterSearchQuery) return;
+          const expanded = { ...(state.expandedFilterGroups || {}) };
+          if (group.open) expanded[header] = true;
+          else delete expanded[header];
+          state.expandedFilterGroups = expanded;
+          if (group.open && group.dataset.filterOptionsLoaded !== '1') {
+            renderPagePreservingTableFocus();
+            return;
+          }
+          const icon = group.querySelector('.filter-group-icon');
+          if (icon) icon.innerHTML = group.open ? ICONS.chevronDown : ICONS.chevronRight;
+        });
+      });
+      document.querySelectorAll('[data-filter-checkbox]').forEach((checkbox) => {
+        checkbox.addEventListener('change', () => {
+          state.filterMenuOpen = true;
+          setTableFilterValue(checkbox.dataset.filterHeader, checkbox.dataset.filterValue, checkbox.checked);
+        });
+      });
+      document.querySelectorAll('[data-remove-filter-header]').forEach((button) => {
+        button.addEventListener('click', () => {
+          state.filterMenuOpen = true;
+          removeTableFilterValue(button.dataset.removeFilterHeader, button.dataset.removeFilterValue);
+        });
+      });
+      document.querySelectorAll('[data-clear-filter-field]').forEach((button) => {
+        button.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          state.filterMenuOpen = true;
+          clearTableFilterField(button.dataset.clearFilterField);
+        });
+      });
+      document.querySelectorAll('[data-clear-table-filters]').forEach((button) => {
+        button.addEventListener('click', () => {
+          state.filterMenuOpen = false;
+          state.tableFilters = {};
+          resetTablePage();
+          updateDetailSelectionAfterFilters();
+          renderPagePreservingTableFocus();
+        });
+      });
+      document.querySelectorAll('[data-table-view]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const nextMode = button.dataset.tableView || 'table';
+          if (state.tableViewMode === nextMode) return;
+          state.tableViewMode = nextMode;
+          setStoredPreference('tableViewMode', state.tableViewMode);
+          applyDefaultFiltersForActiveView();
+          applyDefaultSortForActiveView();
+          state.tableGroupBy = getDefaultGroupFieldsForActiveTable();
+          state.collapsedTableGroups = {};
+          markDefaultGroupsForInitialCollapse(state.tableGroupBy);
+          if (state.tableViewMode === 'detail' && !state.detailRowNumber) {
+            const firstRow = filteredRows()[0];
+            state.detailRowNumber = firstRow ? firstRow.rowNumber : null;
+          }
+          renderPage();
+        });
+      });
+      document.querySelectorAll('[data-select-master-row]').forEach((button) => {
+        button.addEventListener('click', () => {
+          captureMasterListScroll();
+          state.detailRowNumber = Number(button.dataset.selectMasterRow);
+          if (document.body.classList.contains('mobile-viewport')) state.tableViewMode = 'detail';
+          renderPage();
+        });
+      });
+      document.querySelectorAll('[data-group-checkbox]').forEach((checkbox) => {
+        checkbox.addEventListener('change', () => {
+          if (checkbox.checked) addGroupField(checkbox.dataset.groupCheckbox);
+          else removeGroupField(checkbox.dataset.groupCheckbox);
+        });
+      });
+      document.querySelectorAll('[data-move-group]').forEach((button) => {
+        button.addEventListener('click', () => moveGroupField(button.dataset.moveGroup, button.dataset.moveGroupDirection));
+      });
+      document.querySelectorAll('[data-edit-row]').forEach((button) => {
+        button.addEventListener('click', () => openDrawer(Number(button.dataset.editRow)));
+      });
+      document.querySelectorAll('[data-advanced-edit-row]').forEach((button) => {
+        button.addEventListener('click', () => openDrawer(Number(button.dataset.advancedEditRow), 'full'));
+      });
+      document.querySelectorAll('[data-duplicate-row]').forEach((button) => {
+        button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          duplicateRecordFromRow(Number(button.dataset.duplicateRow));
+        });
+      });
+      document.querySelectorAll('[data-delete-row]').forEach((button) => {
+        button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          requestDeleteRecord(Number(button.dataset.deleteRow), button.dataset.deleteTable);
+        });
+      });
+      document.querySelectorAll('[data-new-row]').forEach((button) => {
+        button.addEventListener('click', () => state.tableData && openDrawer(null, 'full'));
+      });
+      document.querySelectorAll('[data-ai-insight-view]').forEach((button) => {
+        button.addEventListener('click', () => openAiInsightForCurrentView());
+      });
+      document.querySelectorAll('[data-toggle-table-group]').forEach((button) => {
+        button.addEventListener('click', () => toggleTableGroup(button.dataset.toggleTableGroup));
+      });
+      document.querySelectorAll('[data-sort]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const header = button.dataset.sort;
+          state.sort = {
+            header,
+            direction: state.sort.header === header ? state.sort.direction * -1 : 1,
+          };
+          resetTablePage();
+          updateDetailSelectionAfterFilters();
+          renderPagePreservingTableFocus();
+        });
+      });
+      document.querySelectorAll('[data-sort-field]').forEach((button) => {
+        button.addEventListener('click', () => {
+          state.sort = {
+            header: button.dataset.sortField || '',
+            direction: Number(button.dataset.sortDirection || 1) < 0 ? -1 : 1,
+          };
+          resetTablePage();
+          updateDetailSelectionAfterFilters();
+          renderPagePreservingTableFocus();
+        });
+      });
+      const clearSort = document.querySelector('[data-clear-sort]');
+      if (clearSort) {
+        clearSort.addEventListener('click', () => {
+          state.sort = { header: '', direction: 1 };
+          resetTablePage();
+          updateDetailSelectionAfterFilters();
+          renderPagePreservingTableFocus();
+        });
+      }
+      document.querySelectorAll('[data-header]').forEach((headerCell) => {
+        headerCell.addEventListener('dragstart', (event) => {
+          event.dataTransfer.setData('text/plain', headerCell.dataset.header);
+          event.dataTransfer.effectAllowed = 'copy';
+        });
+      });
+      const dropzone = document.querySelector('[data-group-drop]');
+      if (dropzone) {
+        dropzone.addEventListener('dragover', (event) => {
+          event.preventDefault();
+          dropzone.classList.add('over');
+          event.dataTransfer.dropEffect = 'copy';
+        });
+        dropzone.addEventListener('dragleave', () => dropzone.classList.remove('over'));
+        dropzone.addEventListener('drop', (event) => {
+          event.preventDefault();
+          dropzone.classList.remove('over');
+          addGroupField(event.dataTransfer.getData('text/plain'));
+        });
+      }
+      document.querySelectorAll('[data-remove-group]').forEach((button) => {
+        button.addEventListener('click', () => removeGroupField(button.dataset.removeGroup));
+      });
+      const clearGrouping = document.querySelector('[data-clear-grouping]');
+      if (clearGrouping) {
+        clearGrouping.addEventListener('click', () => {
+          state.tableGroupBy = [];
+          state.collapsedTableGroups = {};
+          clearDefaultGroupInitialCollapse();
+          resetTablePage();
+          renderPage();
+        });
+      }
+      bindNestedTableButtons(document);
+      loadNestedTablesForActiveForm();
+      if (filterSearchInput) applySmartFilterSearch();
+      window.requestAnimationFrame(applyCellOverflowTooltips);
+    }
+
+    function installFilterDismissHandlers() {
+      if (state.filterDismissBound) return;
+      state.filterDismissBound = true;
+      document.addEventListener('pointerdown', (event) => {
+        const filterMenu = document.querySelector('.filter-menu');
+        if (!filterMenu || !filterMenu.open) return;
+        if (filterMenu.contains(event.target)) return;
+        closeSmartFilterMenu();
+      }, true);
+      document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        const filterMenu = document.querySelector('.filter-menu');
+        if (!filterMenu || !filterMenu.open) return;
+        closeSmartFilterMenu();
+      });
+    }
+
+    function closeSmartFilterMenu() {
+      state.filterMenuOpen = false;
+      const filterMenu = document.querySelector('.filter-menu');
+      if (filterMenu) filterMenu.open = false;
+      const filterSearch = document.querySelector('[data-filter-search]');
+      if (filterSearch && document.activeElement === filterSearch) filterSearch.blur();
+    }
+
+    function applySmartFilterSearch() {
+      const input = document.querySelector('[data-filter-search]');
+      const query = getFilterSearchText([input ? input.value : state.filterSearchQuery || '']);
+      state.filterSearchQuery = input ? input.value || '' : state.filterSearchQuery || '';
+      const clearButton = document.querySelector('[data-clear-filter-search]');
+      if (clearButton) clearButton.disabled = !query;
+
+      document.querySelectorAll('[data-filter-group]').forEach((group) => {
+        const groupText = group.dataset.filterSearch || '';
+        const labelText = group.dataset.filterLabel || '';
+        const header = group.dataset.filterGroup || '';
+        const hasGroupMatch = !query || groupText.indexOf(query) >= 0;
+        group.hidden = !hasGroupMatch;
+
+        let visibleOptions = 0;
+        group.querySelectorAll('[data-filter-option]').forEach((option) => {
+          const optionText = option.dataset.filterSearch || '';
+          const hasOptionMatch = !query || labelText.indexOf(query) >= 0 || optionText.indexOf(query) >= 0;
+          option.hidden = !hasOptionMatch;
+          if (hasOptionMatch) visibleOptions += 1;
+        });
+
+        if (query) {
+          group.open = hasGroupMatch;
+        } else {
+          const hasCheckedOption = !!group.querySelector('[data-filter-checkbox]:checked');
+          group.open = !!((state.expandedFilterGroups || {})[header] || hasCheckedOption);
+        }
+
+        const icon = group.querySelector('.filter-group-icon');
+        if (icon) icon.innerHTML = group.open ? ICONS.chevronDown : ICONS.chevronRight;
+        group.classList.toggle('no-filter-options', hasGroupMatch && visibleOptions === 0);
+      });
+    }
+
+    function setTableFilterValue(header, value, enabled) {
+      if (!header) return;
+      const filters = { ...(state.tableFilters || {}) };
+      const current = new Set(Array.isArray(filters[header]) ? filters[header] : []);
+      if (enabled) current.add(value || '');
+      else current.delete(value || '');
+      if (current.size) filters[header] = Array.from(current);
+      else delete filters[header];
+      state.tableFilters = filters;
+      resetTablePage();
+      updateDetailSelectionAfterFilters();
+      renderPagePreservingTableFocus();
+    }
+
+    function removeTableFilterValue(header, value) {
+      setTableFilterValue(header, value, false);
+    }
+
+    function clearTableFilterField(header) {
+      if (!header) return;
+      const filters = { ...(state.tableFilters || {}) };
+      delete filters[header];
+      state.tableFilters = filters;
+      resetTablePage();
+      updateDetailSelectionAfterFilters();
+      renderPagePreservingTableFocus();
+    }
+
+    function updateDetailSelectionAfterFilters() {
+      if (state.tableViewMode !== 'detail') return;
+      const rows = filteredRows();
+      if (!rows.some((row) => Number(row.rowNumber) === Number(state.detailRowNumber))) {
+        state.detailRowNumber = rows[0] ? rows[0].rowNumber : null;
+      }
+    }
+
+    function bindNestedTableButtons(scope) {
+      (scope || document).querySelectorAll('[data-open-nested-table]').forEach((button) => {
+        if (button.dataset.nestedBound) return;
+        button.dataset.nestedBound = '1';
+        button.addEventListener('click', () => {
+          if (el.drawer && el.drawer.classList.contains('open')) closeDrawer();
+          loadTable(button.dataset.openNestedTable);
+        });
+      });
+      (scope || document).querySelectorAll('[data-open-nested-row]').forEach((button) => {
+        if (button.dataset.nestedBound) return;
+        button.dataset.nestedBound = '1';
+        button.addEventListener('click', () => {
+          openNestedRecordDrawer(button.dataset.openNestedRow, Number(button.dataset.nestedRowNumber || 0));
+        });
+      });
+      (scope || document).querySelectorAll('[data-add-nested-row]').forEach((button) => {
+        if (button.dataset.nestedBound) return;
+        button.dataset.nestedBound = '1';
+        button.addEventListener('click', () => {
+          const seed = {};
+          if (button.dataset.nestedTargetField) seed[button.dataset.nestedTargetField] = getLiveNestedSourceValue(button);
+          openNestedRecordDrawer(button.dataset.addNestedRow, null, seed);
+        });
+      });
+    }
+
+    function getLiveNestedSourceValue(button) {
+      const sourceField = button.dataset.nestedSourceField || '';
+      const fallback = button.dataset.nestedSourceValue || '';
+      const form = button.closest('form') || el.recordForm;
+      if (!sourceField || !form || !form.elements) return fallback;
+      const control = form.elements.namedItem(sourceField);
+      if (!control) return fallback;
+      if (typeof control.value !== 'undefined') return control.value || fallback;
+      const checked = Array.from(control).find((item) => item.checked);
+      return checked ? checked.value : fallback;
+    }
+
+    async function openNestedRecordDrawer(tableKey, rowNumber, seedRecord = {}) {
+      if (!tableKey) return;
+      await ensureUiConfigHydratedForForms();
+      let data = tableKey === state.activeTableKey && state.tableData
+        ? state.tableData
+        : state.dataCache[getTableRuntimeCacheKey(tableKey)];
+      if (!data) data = await fetchItemData({ tableKey });
+      if (!data) return;
+      data = await ensureTableFieldSchemaForForms(tableKey, data);
+      const readOnly = data.table && data.table.readOnly;
+      if (!rowNumber && (readOnly || !canCreateRows(tableKey))) {
+        showToast(readOnly ? 'This inherited table is read-only' : 'Create is disabled by app config');
+        return;
+      }
+      if (rowNumber && !canEditRows(tableKey)) {
+        showToast('Edit is disabled by app config');
+        return;
+      }
+      const row = rowNumber ? data.rows.find((item) => item.rowNumber === rowNumber) : null;
+      const record = row ? { ...row.record } : { ...seedRecord };
+      state.editing = { tableKey, rowNumber: row ? row.rowNumber : null, record, mode: 'nested', isNested: true };
+      state.editingTableData = data;
+      el.drawerTitle.textContent = row ? row.values[0] || 'Edit related row' : `New ${data.table.name}`;
+      el.drawerSubtitle.textContent = `${data.table.sheetName || data.table.name} · related record`;
+      el.deleteBtn.style.visibility = row && !readOnly && canDeleteRows(tableKey) ? 'visible' : 'hidden';
+      if (el.saveBtn) el.saveBtn.style.display = readOnly || !canSaveRecord(row ? row.rowNumber : null, tableKey) ? 'none' : '';
+      if (el.importBtn) el.importBtn.style.display = 'none';
+      el.recordForm.innerHTML = renderForm(data.fields || data.headers, record, 'nested');
+      bindNestedTableButtons(el.recordForm);
+      if (typeof resetImportPanel === 'function') resetImportPanel();
+      el.drawer.classList.remove('advanced');
+      el.drawer.classList.add('open');
+      el.drawerBackdrop.classList.add('open');
+      if (typeof syncDrawerFormControls === 'function') syncDrawerFormControls();
+      if (typeof enhanceImagePreviewSafe === 'function') enhanceImagePreviewSafe('form');
+      scheduleApplyLanguage();
+    }
+
+    function captureMasterListScroll() {
+      const list = document.querySelector('.master-list');
+      if (!list) return;
+      state.masterListScrollTop = list.scrollTop || 0;
+      state.shouldRestoreMasterListScroll = true;
+    }
+
+    function restoreMasterListScroll() {
+      if (!state.shouldRestoreMasterListScroll) return;
+      window.requestAnimationFrame(() => {
+        const list = document.querySelector('.master-list');
+        if (list) list.scrollTop = state.masterListScrollTop || 0;
+        state.shouldRestoreMasterListScroll = false;
+      });
+    }
+
+    function applyCellOverflowTooltips() {
+      document.querySelectorAll('.table-wrap .cell-content').forEach((cell) => {
+        const text = (cell.dataset.fullText || cell.textContent || '').trim();
+        cell.classList.remove('is-truncated');
+        cell.removeAttribute('aria-label');
+        cell.removeAttribute('title');
+        if (!text || text === '-') return;
+        const isTruncated = cell.scrollHeight > cell.clientHeight + 1 || cell.scrollWidth > cell.clientWidth + 1;
+        if (!isTruncated) return;
+        cell.classList.add('is-truncated');
+        cell.setAttribute('aria-label', text);
+        cell.setAttribute('title', text);
+      });
+    }
+
+    function scheduleSearchRender(input, delay = 140) {
+      window.clearTimeout(state.searchRenderTimer);
+      state.searchRenderTimer = window.setTimeout(() => {
+        updateDetailSelectionAfterFilters();
+        renderPagePreservingTableFocus();
+      }, delay);
+    }
+
+    async function duplicateRecordFromRow(rowNumber) {
+      if (!state.tableData || Number(rowNumber) < 0) return;
+      if (state.tableData.table && state.tableData.table.readOnly) {
+        showToast('This inherited table is read-only');
+        return;
+      }
+      if (!canSaveRecord(null)) {
+        showToast('Create is disabled by app config');
+        return;
+      }
+      await ensureUiConfigHydratedForForms();
+      const data = await ensureTableFieldSchemaForForms(state.activeTableKey, state.tableData);
+      const row = data && data.rows ? data.rows.find((item) => Number(item.rowNumber) === Number(rowNumber)) : null;
+      if (!row) {
+        showToast('Record not found');
+        return;
+      }
+      const formMode = 'full';
+      const sourceTitle = getRowTitle(data.headers || [], row);
+      const record = makeDuplicateRecord(data, row, sourceTitle);
+      state.editing = {
+        tableKey: state.activeTableKey,
+        rowNumber: null,
+        record,
+        mode: formMode,
+        duplicatedFromRowNumber: row.rowNumber,
+      };
+      state.editingTableData = data;
+      el.drawerTitle.textContent = getRowTitle(data.headers || [], { record, rowNumber: null, id: '' }) || `Duplicate of ${sourceTitle}`;
+      el.drawerSubtitle.textContent = `New duplicate of ${sourceTitle}`;
+      el.deleteBtn.style.visibility = 'hidden';
+      if (el.saveBtn) el.saveBtn.style.display = canSaveRecord(null) ? '' : 'none';
+      if (el.importBtn) el.importBtn.style.display = canImportRows() ? '' : 'none';
+      el.recordForm.innerHTML = renderForm(data.fields || data.headers, state.editing.record, formMode);
+      bindNestedTableButtons(el.recordForm);
+      loadNestedTablesForDrawerForm(formMode);
+      bindFormFlowSteps(el.recordForm);
+      if (typeof resetImportPanel === 'function') resetImportPanel();
+      el.drawer.classList.add('advanced');
+      el.drawer.classList.add('open');
+      el.drawerBackdrop.classList.add('open');
+      if (typeof syncDrawerFormControls === 'function') syncDrawerFormControls();
+      if (typeof enhanceImagePreviewSafe === 'function') enhanceImagePreviewSafe('form');
+      scheduleApplyLanguage();
+    }
+
+    function makeDuplicateRecord(data, row, sourceTitle) {
+      const headers = data && Array.isArray(data.headers) ? data.headers : Object.keys(row.record || {});
+      const record = {};
+      headers.forEach((header) => {
+        record[header] = row && row.record && row.record[header] != null ? row.record[header] : '';
+      });
+      const titleHeader = getTitleColumnHeader(headers) || headers[0] || '';
+      if (titleHeader) record[titleHeader] = `Duplicate of ${sourceTitle || row.id || 'record'}`;
+      return record;
+    }
+
+    async function openDrawer(rowNumber, mode = 'quick') {
+      let data = state.tableData;
+      if (Number(rowNumber) < 0) {
+        showToast('This record is still saving. Try again after it finishes.');
+        return;
+      }
+      if (data.table && data.table.readOnly && !rowNumber) return;
+      if (!rowNumber && !canCreateRows()) return;
+      if (rowNumber && !canEditRows() && mode !== 'full' && mode !== 'advanced') return;
+      await ensureUiConfigHydratedForForms();
+      data = await ensureTableFieldSchemaForForms(state.activeTableKey, data);
+      const row = rowNumber ? data.rows.find((item) => item.rowNumber === rowNumber) : null;
+      const formMode = mode === 'advanced' || mode === 'full' ? 'full' : 'quick';
+      const isAdvanced = formMode === 'full';
+      const readOnly = data.table && data.table.readOnly;
+      state.editing = row ? { tableKey: state.activeTableKey, rowNumber, record: { ...row.record }, mode: formMode } : { tableKey: state.activeTableKey, rowNumber: null, record: {}, mode: formMode };
+      state.editingTableData = data;
+      el.drawerTitle.textContent = row ? getRowTitle(getVisibleHeaders(), row) || (readOnly ? 'View record' : 'Edit record') : `New ${data.table.name}`;
+      el.drawerSubtitle.textContent = data.table.binding === 'inheritedNativeTable'
+        ? `${data.table.sheetName} Â· inherited from ${data.table.apiTableName || data.table.name}`
+        : data.table.binding === 'nativeTable'
+        ? `${data.table.sheetName} · ${data.table.apiTableName || data.table.name}`
+        : `${data.table.sheetName} · Column ${columnName(data.table.dataStartColumn || 8)} onward`;
+      el.deleteBtn.style.visibility = row && !readOnly && canDeleteRows() ? 'visible' : 'hidden';
+      if (el.saveBtn) el.saveBtn.style.display = readOnly || !canSaveRecord(rowNumber) ? 'none' : '';
+      if (el.importBtn) el.importBtn.style.display = readOnly || !canImportRows() ? 'none' : '';
+      el.recordForm.innerHTML = renderForm(data.fields || data.headers, state.editing.record, formMode);
+      bindNestedTableButtons(el.recordForm);
+      loadNestedTablesForDrawerForm(formMode);
+      if (typeof bindFormFlowSteps === 'function') bindFormFlowSteps(el.recordForm);
+      if (typeof resetImportPanel === 'function') resetImportPanel();
+      el.drawer.classList.toggle('advanced', isAdvanced);
+      el.drawer.classList.add('open');
+      el.drawerBackdrop.classList.add('open');
+      if (typeof syncDrawerFormControls === 'function') syncDrawerFormControls();
+      if (typeof enhanceImagePreviewSafe === 'function') enhanceImagePreviewSafe('form');
+      scheduleApplyLanguage();
+    }
+
+    function renderForm(fieldsOrHeaders, record, mode = 'quick') {
+      const formMode = mode === 'advanced' || mode === 'full' ? 'full' : 'quick';
+      const isNestedEdit = !!(state.editing && state.editing.isNested);
+      const nestedFormConfig = isNestedEdit ? getNestedEditingFormConfig() : null;
+      const formConfig = isNestedEdit
+        ? Object.assign({ columns: 2, labelPosition: 'top', showEmptyFields: true, columnOrder: [], hiddenColumns: [], sections: [] }, nestedFormConfig || {})
+        : getActiveFormConfig({}, formMode);
+      const rawFields = normalizeFormFields(fieldsOrHeaders);
+      const hasFormFieldRules = !!((formConfig.columnOrder && formConfig.columnOrder.length) || (formConfig.hiddenColumns && formConfig.hiddenColumns.length));
+      const baseFields = isNestedEdit || formMode === 'full' || hasFormFieldRules ? rawFields : applyActiveViewFieldOrder(rawFields);
+      const fields = prioritizeImageFields(
+        applyFormFieldOrder(baseFields, formConfig).filter((field) => !field.hidden),
+        record || {}
+      );
+      const configuredColumns = Number(formConfig.columns || 0);
+      const defaultColumns = formMode === 'full' && !isNestedEdit ? 3 : 1;
+      const columnCount = Math.max(1, Math.min(3, formMode === 'full' && !isNestedEdit
+        ? Math.max(configuredColumns || 0, defaultColumns)
+        : (configuredColumns || defaultColumns)));
+      const labelPosition = normalizeClientConfigKey(formConfig.labelPosition || 'top');
+      const sections = prioritizeImageSections(buildFormSections(fields, formConfig), record || {});
+      const useMultiStepLayout = normalizeClientConfigKey(formConfig.formLayoutType || formConfig.formType || '') === 'multi_step';
+      const nestedStepItems = isNestedEdit ? [] : getNestedFormStepItems(formConfig, record || {});
+      if (useMultiStepLayout && sections.length + nestedStepItems.length > 1) {
+        return `
+          ${renderMultiStepFormSections(sections, record, columnCount, labelPosition, nestedStepItems)}
+        `;
+      }
+      return `
+        ${sections.map((section) => renderFormSection(section.title, section.fields, record, columnCount, labelPosition)).join('')}
+        ${isNestedEdit ? '' : renderNestedTables(formConfig, record || {})}
+      `;
+    }
+
+    function renderMultiStepFormSections(sections, record, columnCount, labelPosition, nestedItems = []) {
+      const formSteps = (sections || []).map((section, index) => ({
+        id: getFormSectionDomId(section, index),
+        title: section.title || `Section ${index + 1}`,
+      }));
+      const nestedSteps = (nestedItems || []).map((item) => ({
+        id: item.id,
+        title: item.title || 'Nested table',
+      }));
+      const steps = formSteps.concat(nestedSteps);
+      return `
+        <div class="form-flow-layout">
+          <nav class="form-flow-steps" aria-label="Form sections">
+            ${steps.map((step, index) => `
+              <a class="form-flow-step ${index === 0 ? 'active' : ''}" href="#${escapeAttr(step.id)}" data-form-flow-step="${escapeAttr(step.id)}">
+                <span>${index + 1}</span>
+                <strong>${escapeHtml(step.title || `Step ${index + 1}`)}</strong>
+              </a>
+            `).join('')}
+          </nav>
+          <div class="form-flow-content">
+            <div class="form-flow-sections">
+              ${(sections || []).map((section, index) => renderFormSection(section.title, section.fields, record, columnCount, labelPosition, getFormSectionDomId(section, index))).join('')}
+              ${(nestedItems || []).map((item) => renderNestedFormStepSection(item)).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function getFormSectionDomId(section, index) {
+      const title = normalizeClientConfigKey(section && section.title ? section.title : `section_${index + 1}`);
+      return `form-section-${index + 1}-${title || 'step'}`;
+    }
+
+    function bindFormFlowSteps(scope) {
+      if (state.formFlowScrollCleanup) {
+        state.formFlowScrollCleanup();
+        state.formFlowScrollCleanup = null;
+      }
+      const root = scope || document;
+      const layout = root.querySelector('.form-flow-layout');
+      if (!layout) return;
+      const steps = Array.from(layout.querySelectorAll('[data-form-flow-step]'));
+      const sections = Array.from(layout.querySelectorAll('.form-section[id]'));
+      const scroller = el.drawer ? el.drawer.querySelector('.drawer-body') : null;
+      if (!steps.length || !sections.length || !scroller) return;
+      const setActive = (id) => {
+        steps.forEach((step) => {
+          const active = step.dataset.formFlowStep === id;
+          step.classList.toggle('active', active);
+          step.setAttribute('aria-current', active ? 'step' : 'false');
+        });
+      };
+      const updateActiveFromScroll = () => {
+        const scrollerTop = scroller.getBoundingClientRect().top;
+        const current = sections.reduce((active, section) => {
+          const top = section.getBoundingClientRect().top - scrollerTop;
+          return top <= 96 ? section : active;
+        }, sections[0]);
+        if (current && current.id) setActive(current.id);
+      };
+      steps.forEach((step) => {
+        step.addEventListener('click', (event) => {
+          event.preventDefault();
+          const target = document.getElementById(step.dataset.formFlowStep || '');
+          if (!target) return;
+          setActive(target.id);
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      });
+      scroller.addEventListener('scroll', updateActiveFromScroll, { passive: true });
+      state.formFlowScrollCleanup = () => scroller.removeEventListener('scroll', updateActiveFromScroll);
+      updateActiveFromScroll();
+    }
+
+    function buildFormSections(fields, formConfig) {
+      const configured = Array.isArray(formConfig.sections) ? formConfig.sections : [];
+      if (!configured.length) return [{ title: 'Main details', fields }];
+      const hasExplicitDefaultSection = configured.some((section) => normalizeClientConfigKey(section && section.title) === 'default_section');
+      const byKey = fields.reduce((acc, field) => {
+        acc[normalizeClientConfigKey(field.name)] = field;
+        acc[normalizeClientConfigKey(field.label)] = field;
+        return acc;
+      }, {});
+      const assignedKeys = new Set(configured.reduce((acc, section) => acc.concat(section && Array.isArray(section.fields) ? section.fields : []), []).map(normalizeClientConfigKey));
+      const sections = configured.map((section) => {
+        const sectionFields = (section.fields || [])
+          .map((fieldName) => byKey[normalizeClientConfigKey(fieldName)] || null)
+          .filter(Boolean);
+        return { title: section.title || 'Section', fields: sectionFields };
+      }).filter((section) => section.fields.length);
+      if (!hasExplicitDefaultSection) {
+        const rest = fields.filter((field) => !assignedKeys.has(normalizeClientConfigKey(field.name)) && !assignedKeys.has(normalizeClientConfigKey(field.label)));
+        if (rest.length) sections.unshift({ title: 'Default section', fields: rest });
+      }
+      return sections;
+    }
+
+    function renderFormSection(title, fields, record, columnCount, labelPosition, sectionId = '') {
+      const safeColumnCount = Math.max(1, Math.min(3, Number(columnCount || 1)));
+      return `
+        <section class="form-section" ${sectionId ? `id="${escapeAttr(sectionId)}"` : ''}>
+          <p class="form-section-title">${escapeHtml(title || 'Main details')}</p>
+          <div class="form-grid columns-${safeColumnCount} ${labelPosition === 'side' || labelPosition === 'left' ? 'label-side' : ''}">
+            ${(fields || []).map((field, index) => renderFormControl(field, record ? record[field.name] || '' : '', index)).join('')}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderFormControl(field, value, index) {
+      const full = /note|detail|requirement|guide|action|description|summary/i.test(field.name);
+      const input = renderFieldInput(field, value, index);
+      const hasImagePreview = isImagePreviewField(field.name, value);
+      const computed = isComputedField(field);
+      return `
+        <label class="form-control ${full ? 'full' : ''} ${hasImagePreview ? 'image-link-field' : ''} ${computed ? 'computed-field' : ''}" data-form-field="${escapeAttr(field.name)}">
+          <span>${escapeHtml(field.label || field.name)}${computed ? `<em class="field-badge" title="Calculated by Google Sheet formula">${ICONS.lock || ''}Formula</em>` : ''}</span>
+          ${input}
+        </label>
+      `;
+    }
+
+    function prioritizeImageFields(fields, record) {
+      const list = fields || [];
+      const index = list.findIndex((field) => isImagePreviewField(field.name || field.label, record ? record[field.name] : ''));
+      if (index <= 0) return list;
+      const next = list.slice();
+      const imageField = next.splice(index, 1)[0];
+      next.unshift(imageField);
+      return next;
+    }
+
+    function prioritizeImageSections(sections, record) {
+      const list = (sections || []).map((section) => Object.assign({}, section, { fields: (section.fields || []).slice() }));
+      if (!list.length) return list;
+      for (let sectionIndex = 0; sectionIndex < list.length; sectionIndex += 1) {
+        const fieldIndex = list[sectionIndex].fields.findIndex((field) => isImagePreviewField(field.name || field.label, record ? record[field.name] : ''));
+        if (fieldIndex < 0) continue;
+        if (sectionIndex === 0 && fieldIndex === 0) return list;
+        const imageField = list[sectionIndex].fields.splice(fieldIndex, 1)[0];
+        list[0].fields.unshift(imageField);
+        return list.filter((section) => section.fields.length);
+      }
+      return list;
+    }
+
+    function isImagePreviewField(fieldName, value) {
+      const imageName = typeof isImageFieldName === 'function'
+        ? isImageFieldName(fieldName)
+        : /photo|image|thumbnail|avatar|picture/i.test(String(fieldName || ''));
+      if (imageName) return true;
+      return !!(value && typeof extractImagePreviewUrl === 'function' && extractImagePreviewUrl(value));
+    }
+
+    function loadNestedTablesForDrawerForm(mode) {
+      const formMode = mode === 'advanced' || mode === 'full' ? 'full' : 'quick';
+      const formConfig = getActiveFormConfig({}, formMode);
+      loadNestedTablesForConfig(formConfig, () => refreshDrawerNestedTables(formConfig));
+    }
+
+    function refreshDrawerNestedTables(formConfig) {
+      if (!el.drawer || !el.drawer.classList.contains('open') || !el.recordForm) return;
+      const parentRecord = state.editing ? state.editing.record : {};
+      const flow = el.recordForm.querySelector('.form-flow-layout');
+      if (flow) {
+        const items = getNestedFormStepItems(formConfig, parentRecord);
+        const activeIds = new Set(items.map((item) => item.id));
+        el.recordForm.querySelectorAll('[data-form-flow-nested-section]').forEach((section) => {
+          if (!activeIds.has(section.id)) section.remove();
+        });
+        const container = el.recordForm.querySelector('.form-flow-sections');
+        items.forEach((item) => {
+          const current = document.getElementById(item.id);
+          const html = renderNestedFormStepSection(item);
+          if (current) current.outerHTML = html;
+          else if (container) container.insertAdjacentHTML('beforeend', html);
+        });
+        bindNestedTableButtons(el.recordForm);
+        if (typeof bindFormFlowSteps === 'function') bindFormFlowSteps(el.recordForm);
+        return;
+      }
+      const current = el.recordForm.querySelector('.nested-table-section');
+      const html = renderNestedTables(formConfig, parentRecord);
+      if (!html) return;
+      if (current) current.outerHTML = html;
+      else el.recordForm.insertAdjacentHTML('beforeend', html);
+      bindNestedTableButtons(el.recordForm);
+    }
+
+    function normalizeFormFields(fieldsOrHeaders) {
+      return (fieldsOrHeaders || []).map((field, index) => {
+        const source = typeof field === 'string'
+          ? { name: field, label: field, index, inputType: inputTypeForHeader(field), validation: null }
+          : field;
+        const name = source.name || source.label || '';
+        const configured = getConfiguredFormField(name);
+        const validation = source.validation || null;
+        const options = validation && Array.isArray(validation.options) ? validation.options : [];
+        const inputType = configured.inputType || source.inputType || inputTypeForHeader(name);
+        const editingData = typeof getEditingTableData === 'function' ? getEditingTableData() : state.tableData;
+        const optionsLoading = inputType === 'select' && !options.length && needsFullFieldSchema(editingData);
+        if (typeof field === 'string') {
+          return Object.assign({}, source, configured, { name, optionsLoading });
+        }
+        return {
+          name,
+          label: configured.label || source.label || name,
+          index: source.index == null ? index : source.index,
+          inputType,
+          validation,
+          required: configured.required == null ? !!source.required : !!configured.required,
+          computed: !!(source.computed || source.formulaDriven || source.editable === false),
+          editable: source.editable !== false,
+          formulaDriven: !!source.formulaDriven,
+          hidden: configured.hidden == null ? !!source.hidden : !!configured.hidden,
+          sortOrder: configured.sortOrder == null ? source.sortOrder : configured.sortOrder,
+          groupable: configured.groupable == null ? source.groupable !== false : configured.groupable !== false,
+          defaultGroup: configured.defaultGroup == null ? !!source.defaultGroup : !!configured.defaultGroup,
+          groupOrder: configured.groupOrder == null ? source.groupOrder : configured.groupOrder,
+          section: configured.section || source.section || '',
+          optionsLoading,
+        };
+      }).filter((field) => field.name && !field.hidden);
+    }
+
+    function getConfiguredFormField(fieldName) {
+      const tableKey = (state.editing && state.editing.tableKey) || state.activeTableKey || '';
+      const config = typeof getUiConfig === 'function' ? getUiConfig() : state.uiConfig || {};
+      const byTableKey = config && config.dataColumns && config.dataColumns.byTableKey
+        ? config.dataColumns.byTableKey
+        : {};
+      const fields = byTableKey[tableKey] || {};
+      return fields[normalizeClientConfigKey(fieldName)] || {};
+    }
+
+    function renderFieldInput(field, value, index) {
+      const validation = field.validation || {};
+      const options = Array.isArray(validation.options) ? validation.options : [];
+      const name = escapeAttr(field.name);
+      let inputType = field.inputType || inputTypeForHeader(field.name);
+      if (options.length && inputType !== 'select' && inputType !== 'datalist') {
+        inputType = validation.strict ? 'select' : 'datalist';
+      }
+      const multiline = /note|detail|requirement|guide|action|description|summary/i.test(field.name);
+      const title = validation.helpText ? ` title="${escapeAttr(validation.helpText)}"` : '';
+      const editingData = typeof getEditingTableData === 'function' ? getEditingTableData() : state.tableData;
+      const readOnly = editingData && editingData.table && editingData.table.readOnly;
+      const computed = isComputedField(field);
+      const disabled = readOnly || computed ? ' disabled' : '';
+      const required = field.required && !readOnly && !computed ? ' required' : '';
+      const computedTitle = computed && !title ? ' title="Calculated by Google Sheet formula"' : title;
+
+      if (inputType === 'select') {
+        const loading = !!field.optionsLoading;
+        const currentOption = value && !options.includes(value)
+          ? `<option value="${escapeAttr(value)}" selected>${escapeHtml(value)}</option>`
+          : '';
+        return `
+          <select class="field" name="${name}" data-select-options-loading="${loading ? '1' : '0'}" aria-busy="${loading ? 'true' : 'false'}"${computedTitle}${disabled}${required}>
+            <option value="">${loading ? 'Loading options...' : ''}</option>
+            ${currentOption}
+            ${options.map((option) => `<option value="${escapeAttr(option)}"${option === value ? ' selected' : ''}>${escapeHtml(option)}</option>`).join('')}
+          </select>
+        `;
+      }
+
+      if (options.length && inputType === 'datalist') {
+        const listId = `validation-${index}-${field.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`;
+        return `
+          <input class="field" type="text" name="${name}" value="${escapeAttr(value)}" list="${escapeAttr(listId)}"${computedTitle}${disabled}${required}>
+          <datalist id="${escapeAttr(listId)}">
+            ${options.map((option) => `<option value="${escapeAttr(option)}"></option>`).join('')}
+          </datalist>
+        `;
+      }
+
+      if (inputType === 'textarea' || multiline) {
+        return `<textarea class="field" name="${name}"${computedTitle}${disabled}${required}>${escapeHtml(value)}</textarea>`;
+      }
+
+      const step = inputType === 'number' ? ' step="any"' : '';
+      const inputValue = inputType === 'date' ? normalizeDateInputValue(value) : value;
+      return `<input class="field" type="${escapeAttr(inputType)}" name="${name}" value="${escapeAttr(inputValue)}"${step}${computedTitle}${disabled}${required}>`;
+    }
+
+    function normalizeDateInputValue(value) {
+      if (value == null || value === '') return '';
+      if (value instanceof Date && !Number.isNaN(value.getTime())) return formatLocalDateInputValue(value);
+      const text = String(value).trim();
+      if (!text) return '';
+
+      const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+      if (dateOnly) return `${dateOnly[1]}-${dateOnly[2]}-${dateOnly[3]}`;
+
+      if (/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+\-]\d{2}:?\d{2})$/i.test(text)) {
+        const zonedDate = new Date(text);
+        if (!Number.isNaN(zonedDate.getTime())) return formatLocalDateInputValue(zonedDate);
+      }
+
+      const yearFirst = /^(\d{4})[\/.](\d{1,2})[\/.](\d{1,2})(?:\s|T|$)/.exec(text);
+      if (yearFirst) return formatDateInputParts(yearFirst[1], yearFirst[2], yearFirst[3]);
+
+      const dayFirst = /^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})(?:\s|T|$)/.exec(text);
+      if (dayFirst) {
+        const first = Number(dayFirst[1]);
+        const second = Number(dayFirst[2]);
+        const monthFirst = second > 12 || (first <= 12 && second <= 12 && isMonthFirstBrowserLocale());
+        return monthFirst
+          ? formatDateInputParts(dayFirst[3], first, second)
+          : formatDateInputParts(dayFirst[3], second, first);
+      }
+
+      const parsed = new Date(text);
+      return Number.isNaN(parsed.getTime()) ? '' : formatLocalDateInputValue(parsed);
+    }
+
+    function formatLocalDateInputValue(date) {
+      return formatDateInputParts(date.getFullYear(), date.getMonth() + 1, date.getDate());
+    }
+
+    function formatDateInputParts(year, month, day) {
+      const numericYear = Number(year);
+      const numericMonth = Number(month);
+      const numericDay = Number(day);
+      const date = new Date(numericYear, numericMonth - 1, numericDay);
+      if (date.getFullYear() !== numericYear || date.getMonth() !== numericMonth - 1 || date.getDate() !== numericDay) return '';
+      return `${numericYear}-${padDateInputPart(numericMonth)}-${padDateInputPart(numericDay)}`;
+    }
+
+    function isMonthFirstBrowserLocale() {
+      try {
+        return /^en-US\b/i.test(navigator.language || '');
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function padDateInputPart(value) {
+      return String(value).padStart(2, '0');
+    }
+
+    function isComputedField(field) {
+      return !!(field && (field.computed || field.formulaDriven || field.editable === false));
+    }
+
+    function inputTypeForHeader(header) {
+      const normalized = String(header || '').toLowerCase();
+      if (/date|deadline|target/.test(normalized)) return 'date';
+      if (/amount|budget|price|cost|number|limit|value|quantity|qty/.test(normalized)) return 'number';
+      return 'text';
+    }
+

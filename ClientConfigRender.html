@@ -1,0 +1,472 @@
+    /*
+      Config App layout rendering, list panels, grouped fields, and display grouping helpers.
+    */
+    function renderConfigApp() {
+      syncAppModeShell();
+      if (!state.configBootstrap) {
+        el.pageTitle.textContent = 'Config app';
+        el.breadcrumb.textContent = 'Loading config registry';
+        el.content.innerHTML = '<section class="panel empty config-loading-panel"><div><h3>Loading config</h3><p>Preparing setting tables and permissions.</p></div></section>';
+        if (!state.configBootstrapInFlight) ensureConfigBootstrap();
+        scheduleApplyLanguage();
+        return;
+      }
+
+      const type = getActiveConfigType();
+      const item = getActiveConfigItem();
+      const data = state.configData || {};
+      const showPreview = shouldShowConfigPreview(type, item);
+      warmActiveConfigDependenciesForRender();
+      el.pageTitle.textContent = 'Config app';
+      el.breadcrumb.textContent = `${type ? type.label : 'Config'} / ${item ? item.label : ''}`;
+      el.content.innerHTML = `
+        <section class="config-app">
+          <div class="config-workspace ${showPreview ? 'with-preview' : 'without-preview'}">
+            <aside class="config-left-nav" data-rail-label="Nav">${renderConfigLeftNav()}</aside>
+            <section class="config-list-panel" data-rail-label="List">${renderConfigListPanel()}</section>
+            <section class="config-settings-panel" data-rail-label="Settings">${renderConfigSettingsPanel(data)}</section>
+            ${showPreview ? `<section class="config-preview-panel">${renderConfigPreviewPanel(data)}</section>` : ''}
+          </div>
+        </section>
+      `;
+      bindConfigEvents();
+      scheduleApplyLanguage();
+    }
+
+    function warmActiveConfigDependenciesForRender() {
+      if (!state.activeConfigKey) return;
+      const needsRelationship = state.activeConfigKey === 'form' && !state.configDataCache['config:relationship'];
+      const needsPage = ['view', 'form', 'component'].includes(state.activeConfigKey) && !state.configDataCache['config:page'];
+      const needsView = ['form', 'component'].includes(state.activeConfigKey) && !state.configDataCache['config:view'];
+      if (!needsRelationship && !needsPage && !needsView) return;
+      const warmKey = `${state.activeConfigKey}:${needsRelationship ? 'relationship' : ''}:${needsPage ? 'page' : ''}:${needsView ? 'view' : ''}`;
+      if (state.configDependencyWarmKey === warmKey) return;
+      state.configDependencyWarmKey = warmKey;
+      ensureConfigDependencies(state.activeConfigKey, false)
+        .then(() => {
+          if (state.appMode === 'config' && state.configDependencyWarmKey === warmKey) renderPage();
+        })
+        .catch((error) => {
+          console.warn('Config dependency warm skipped:', error && error.message ? error.message : error);
+        })
+        .finally(() => {
+          if (state.configDependencyWarmKey === warmKey) state.configDependencyWarmKey = '';
+        });
+    }
+
+    function shouldShowConfigPreview(type, item) {
+      if (!(type && type.key === 'app')) return false;
+      const key = normalizeClientConfigKey(item && item.key ? item.key : state.activeConfigKey);
+      return !['page', 'view', 'form'].includes(key);
+    }
+
+    function renderConfigTypeBar() {
+      const summary = state.configBootstrap.summary || {};
+      return `
+        <header class="config-type-bar">
+          <div class="config-type-tabs">
+            ${(state.configBootstrap.types || []).map((type) => `
+              <button class="config-type-tab ${type.key === state.configActiveType ? 'active' : ''}" type="button" data-config-type="${escapeAttr(type.key)}">
+                <span class="${type.accent === 'green' ? 'green-dot' : 'blue-dot'}"></span>
+                ${escapeHtml(type.label)}
+              </button>
+            `).join('')}
+          </div>
+          <div class="config-health">
+            <strong>${summary.connected || 0}/${summary.total || 0}</strong>
+            <span>tables connected</span>
+          </div>
+        </header>
+      `;
+    }
+
+    function renderConfigLeftNav() {
+      return `
+        ${(state.configBootstrap.types || []).map((configType) => renderConfigNavType(configType)).join('')}
+      `;
+    }
+
+    function renderConfigNavType(configType) {
+      const collapsed = !!state.configCollapsedTypes[configType.key];
+      return `
+        <section class="nav-section config-nav-section">
+          <button class="nav-parent ${configType.key === state.configActiveType ? 'active' : ''}" type="button" data-config-type-toggle="${escapeAttr(configType.key)}" aria-expanded="${!collapsed}">
+            <span class="nav-dot ${configType.accent === 'green' ? 'operation' : 'business'}"></span>
+            <span>${escapeHtml(configType.label)}</span>
+          </button>
+          <div class="nav-children ${collapsed ? 'collapsed' : ''}">
+            ${(configType.groups || []).map((group) => renderConfigNavGroup(configType, group)).join('')}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderConfigNavGroup(configType, group) {
+      const groupKey = `${configType.key}:${group.key}`;
+      const collapsed = !!state.configCollapsedGroups[groupKey];
+      return `
+        <div class="nav-group config-nav-group ${collapsed ? 'collapsed' : ''}">
+          <button class="nav-group-title ${configType.key === state.configActiveType && group.key === state.configActiveGroup ? 'active' : ''}" type="button" data-config-group-toggle="${escapeAttr(groupKey)}" data-config-type="${escapeAttr(configType.key)}" data-config-group="${escapeAttr(group.key)}" aria-expanded="${!collapsed}">
+            <span class="group-toggle-icon">${collapsed ? ICONS.chevronRight : ICONS.chevronDown}</span>
+            <span>${escapeHtml(group.label)}</span>
+          </button>
+          <div class="nav-group-children">
+            ${(group.items || []).map((item) => `
+              <button class="nav-item config-nav-item ${item.key === state.activeConfigKey ? 'active' : ''} ${item.connected ? '' : 'missing'}" type="button" data-config-item="${escapeAttr(item.key)}" title="${escapeAttr(item.label)}">
+                <span>${escapeHtml(item.label)}</span>
+              </button>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderConfigListPanel() {
+      const item = getActiveConfigItem();
+      const rows = filteredConfigRows();
+      const connected = item && item.connected;
+      const isViewConfig = state.activeConfigKey === 'view';
+      const isScopedConfig = ['view', 'form', 'component'].includes(state.activeConfigKey);
+      return `
+        <div class="config-panel-header">
+          <div>
+            <div class="config-list-title">
+              <strong>${escapeHtml(item ? item.label : 'Config')}</strong>
+              ${renderConfigSheetLink(item)}
+            </div>
+          </div>
+        </div>
+        <div class="config-list-tools ${isScopedConfig ? 'view-list-tools' : ''}">
+          ${isScopedConfig
+            ? renderConfigPageFilter()
+            : `<input class="field" id="configSearchInput" placeholder="Search config" value="${escapeAttr(state.configQuery || '')}">`}
+          ${connected ? `<button class="btn primary config-new-btn" type="button" data-new-config-row>${ICONS.plus}<span>New</span></button>` : ''}
+        </div>
+        <div class="config-record-list">
+          ${connected
+            ? renderGroupedConfigRecordList(rows) || '<div class="config-empty-row">No config rows</div>'
+            : '<div class="config-empty-row">Convert or create this table in Google Sheets to edit it here.</div>'}
+        </div>
+      `;
+    }
+
+    function renderConfigSheetLink(item) {
+      const url = item && item.table && item.table.spreadsheetUrl ? item.table.spreadsheetUrl : '';
+      if (!url) return '';
+      const label = item && item.label ? item.label : 'config';
+      return `
+        <a class="config-sheet-link" href="${escapeAttr(url)}" target="_blank" rel="noopener"
+          title="Open ${escapeAttr(label)} config sheet" aria-label="Open ${escapeAttr(label)} config sheet">
+          ${ICONS.external}
+        </a>
+      `;
+    }
+
+    function renderConfigPageFilter() {
+      const options = getConfigPageFilterOptions();
+      if (!options.length) return '';
+      return `
+        <label class="config-page-filter-wrap">
+          <span>Page</span>
+          <select class="field config-page-filter" id="configPageFilter" aria-label="Page">
+            <option value="" ${!state.configPageFilter ? 'selected' : ''}>All pages</option>
+            ${options.map((page) => `
+              <option value="${escapeAttr(page.id)}" ${state.configPageFilter === page.id ? 'selected' : ''}>
+                ${escapeHtml(page.label || page.id)}
+              </option>
+            `).join('')}
+          </select>
+        </label>
+      `;
+    }
+
+    function renderGroupedConfigRecordList(rows) {
+      if (!rows.length) return '';
+      if ((state.activeConfigKey === 'view' || state.activeConfigKey === 'form' || state.activeConfigKey === 'component') && !state.configPageFilter) {
+        return renderViewRowsGroupedByPage(rows);
+      }
+      const groups = rows.reduce((acc, row) => {
+        const label = getConfigRowGroup(row) || 'Other';
+        if (!acc.byLabel[label]) {
+          acc.byLabel[label] = { label, rows: [] };
+          acc.list.push(acc.byLabel[label]);
+        }
+        acc.byLabel[label].rows.push(row);
+        return acc;
+      }, { byLabel: {}, list: [] }).list;
+
+      const forceGroupHeader = ['dataColumn', 'relationship'].includes(state.activeConfigKey);
+      if (groups.length <= 1 && !forceGroupHeader) return rows.map((row) => renderConfigRecordItem(row)).join('');
+      return groups.map((group) => `
+        <section class="config-record-group">
+          <div class="config-record-group-title">${escapeHtml(group.label)}</div>
+          ${group.rows.map((row) => renderConfigRecordItem(row)).join('')}
+        </section>
+      `).join('');
+    }
+
+    function renderViewRowsGroupedByPage(rows) {
+      if (state.activeConfigKey === 'component') return renderComponentRowsGroupedByPageAndView(rows);
+      const pages = getConfigPageFilterOptions().reduce((acc, page) => {
+        acc[page.id] = page.label || page.id;
+        return acc;
+      }, {});
+      const groups = rows.reduce((acc, row) => {
+        const pageId = getConfigRowPageId(row.record) || 'Unassigned page';
+        const label = pages[pageId] || pageId;
+        if (!acc.byId[pageId]) {
+          acc.byId[pageId] = { id: pageId, label, rows: [] };
+          acc.list.push(acc.byId[pageId]);
+        }
+        acc.byId[pageId].rows.push(row);
+        return acc;
+      }, { byId: {}, list: [] }).list;
+      return groups.map((group) => `
+        <section class="config-record-group view-page-group">
+          <div class="config-record-group-title">${escapeHtml(group.label)}</div>
+          ${group.rows.map((row) => renderConfigRecordItem(row)).join('')}
+        </section>
+      `).join('');
+    }
+
+    function renderComponentRowsGroupedByPageAndView(rows) {
+      const pages = getConfigPageFilterOptions().reduce((acc, page) => {
+        acc[page.id] = page.label || page.id;
+        return acc;
+      }, {});
+      const groups = rows.reduce((acc, row) => {
+        const viewId = getRecordValueByHints(row.record, ['view_id', 'view']) || 'Unassigned view';
+        const view = getCachedViewRecord(viewId);
+        const pageId = getConfigRowPageId(row.record) || 'Unassigned page';
+        const viewLabel = view ? getRecordValueByHints(view, ['item', 'label', 'name', 'title']) || viewId : viewId;
+        if (!acc.byPage[pageId]) {
+          acc.byPage[pageId] = { id: pageId, label: pages[pageId] || pageId, views: {}, list: [] };
+          acc.pages.push(acc.byPage[pageId]);
+        }
+        const page = acc.byPage[pageId];
+        if (!page.views[viewId]) {
+          page.views[viewId] = { id: viewId, label: viewLabel, rows: [] };
+          page.list.push(page.views[viewId]);
+        }
+        page.views[viewId].rows.push(row);
+        return acc;
+      }, { byPage: {}, pages: [] }).pages;
+
+      return groups.map((page) => `
+        <section class="config-record-group view-page-group">
+          <div class="config-record-group-title">${escapeHtml(page.label)}</div>
+          ${page.list.map((view) => `
+            <div class="config-record-subgroup">
+              <div class="config-record-subgroup-title">${escapeHtml(view.label)}</div>
+              ${view.rows.map((row) => renderConfigRecordItem(row)).join('')}
+            </div>
+          `).join('')}
+        </section>
+      `).join('');
+    }
+
+    function renderConfigRecordItem(row) {
+      const title = getConfigRowTitle(row);
+      const active = row.rowNumber === state.configSelectedRowNumber;
+      return `
+        <button class="config-record-item ${active ? 'active' : ''}" type="button" data-config-row="${row.rowNumber}">
+          <strong>${escapeHtml(title)}</strong>
+        </button>
+      `;
+    }
+
+    function renderConfigSettingsPanel(data) {
+      const item = getActiveConfigItem();
+      if (!item || !item.connected) {
+        return `
+          <div class="config-panel-header"><div><strong>Settings</strong></div></div>
+          <div class="config-missing-panel">No editable config table was detected for this item.</div>
+        `;
+      }
+
+      const row = getSelectedConfigRow();
+      const record = row ? row.record : {};
+      const fields = sortConfigFieldsForDisplay(normalizeConfigFields(data.fields || data.headers || []).filter(shouldShowConfigField));
+      return `
+        <form class="config-settings-form" id="configSettingsForm">
+          <div class="config-panel-header sticky">
+            <div>
+              <strong>${row ? escapeHtml(getConfigRowTitle(row)) : `New ${escapeHtml(item.label)}`}</strong>
+            </div>
+            <div class="config-form-actions">
+              ${row ? `<button class="btn danger" type="button" data-delete-config-row>Delete</button>` : ''}
+              <button class="btn primary" type="submit">Save</button>
+            </div>
+          </div>
+          <div class="config-form-body">
+            ${renderGroupedConfigFields(fields, record, row && row.validations ? row.validations : {})}
+            ${state.activeConfigKey === 'form' ? renderFormNestedRelationshipBuilder(record) : ''}
+          </div>
+        </form>
+      `;
+    }
+
+    function renderGroupedConfigFields(fields, record, validations) {
+      if (!usesLeanConfigGroups() && fields.length <= 7) {
+        return `
+          <section class="config-field-group flat">
+            <div class="config-field-grid config-property-grid" style="grid-template-columns:minmax(0,1fr)">
+              ${fields.map((field) => renderConfigField(field, record[field.name] || '', record, validations || {})).join('')}
+            </div>
+          </section>
+        `;
+      }
+
+      const groups = groupConfigFields(fields);
+      return groups.map((group) => `
+        <details class="config-field-group config-field-details" open>
+          <summary class="config-field-group-title">
+            <span class="config-field-group-chevron">${ICONS.chevronRight}</span>
+            <strong>${escapeHtml(group.label)}</strong>
+            <em>${group.fields.length}</em>
+          </summary>
+          <div class="config-field-grid config-property-grid" style="grid-template-columns:minmax(0,1fr)">
+            ${group.fields.map((field) => renderConfigField(field, record[field.name] || '', record, validations || {})).join('')}
+          </div>
+        </details>
+      `).join('');
+    }
+
+    function usesLeanConfigGroups() {
+      return !!state.configSelectedRowNumber && ['form', 'view', 'component'].includes(state.activeConfigKey);
+    }
+    function normalizeConfigFields(fieldsOrHeaders) {
+      return normalizeFormFields(fieldsOrHeaders).map((field) => Object.assign(field, {
+        group: inferConfigFieldGroup(field.name),
+      }));
+    }
+
+    function sortConfigFieldsForDisplay(fields) {
+      if (state.activeConfigKey !== 'page' && state.activeConfigKey !== 'view' && state.activeConfigKey !== 'form') return fields;
+      const order = {
+        view_id: 10,
+        form_id: 10,
+        id: 10,
+        key: 10,
+        page_id: 20,
+        page: 20,
+        item: 30,
+        label: 30,
+        name: 30,
+        mode: 38,
+        form_mode: 38,
+        edit_mode: 38,
+        form_type: 40,
+        view_type: 40,
+        display_type: 40,
+        type: 40,
+        mode: 40,
+        title_column: 45,
+        record_title_column: 45,
+        record_name_column: 45,
+        display_name_column: 45,
+        display_column: 45,
+        section_layout: 50,
+        form_sections: 50,
+        sections: 50,
+        column_order: 55,
+        field_order: 55,
+        columns_order: 55,
+        columns: 70,
+        layout_columns: 70,
+        column_count: 70,
+        label_position: 75,
+        label_layout: 75,
+        show_empty_fields: 70,
+        main_display_name: 75,
+        main_display_field: 75,
+        display_name: 75,
+        display_field: 75,
+        title_field: 75,
+        record_title_field: 75,
+        primary_field: 75,
+        name_field: 75,
+        ai_insight_enable: 80,
+        ai_insight_column: 82,
+        data_mode: 78,
+        data_mode_key: 78,
+        loading_mode: 78,
+        table_data_mode: 78,
+        hidden_columns: 90,
+        hidden_fields: 90,
+        filter_fields: 110,
+        filter_columns: 110,
+        smart_filter_fields: 110,
+        default_filters: 112,
+        predefined_filters: 112,
+        preset_filters: 112,
+        filter_config: 112,
+        default_sort: 114,
+        default_sort_field: 114,
+        sort_field: 114,
+        order_by: 114,
+        default_sort_direction: 116,
+        sort_direction: 116,
+        order_direction: 116,
+        nested_table: 120,
+        nested_tables: 120,
+        related_table: 120,
+        related_tables: 120,
+        status: 130,
+      };
+      return fields.slice().sort((left, right) => {
+        const leftOrder = order[normalizeClientConfigKey(left.name)] || 500;
+        const rightOrder = order[normalizeClientConfigKey(right.name)] || 500;
+        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+        return left.index - right.index;
+      });
+    }
+
+    function groupConfigFields(fields) {
+      let definitions;
+      if (state.configSelectedRowNumber && state.activeConfigKey === 'form') {
+        definitions = [
+          { key: 'display', label: 'Record display' },
+          { key: 'layout', label: 'Sections & fields' },
+          { key: 'behavior', label: 'Behavior' },
+        ];
+      } else if (state.configSelectedRowNumber && state.activeConfigKey === 'view') {
+        definitions = [
+          { key: 'display', label: 'Record display' },
+          { key: 'layout', label: 'Sections & fields' },
+          { key: 'filters', label: 'Filters' },
+        ];
+      } else if (state.configSelectedRowNumber && state.activeConfigKey === 'component') {
+        return fields.length ? [{ label: 'Component control', fields }] : [];
+      } else {
+        definitions = [
+        { key: 'identity', label: 'Identity' },
+        { key: 'binding', label: 'Page & data binding' },
+        { key: 'display', label: 'Display' },
+        { key: 'insight', label: 'AI insight' },
+        { key: 'layout', label: 'Sections & fields' },
+        { key: 'nested', label: 'Nested tables & relationships' },
+        { key: 'behavior', label: 'Behavior' },
+        { key: 'design', label: 'Design' },
+        { key: 'notes', label: 'Notes' },
+        ];
+      }
+      return definitions.map((definition) => ({
+        label: definition.label,
+        fields: fields.filter((field) => field.group === definition.key),
+      })).filter((group) => group.fields.length);
+    }
+
+    function inferConfigFieldGroup(name) {
+      const normalized = String(name || '').toLowerCase();
+      if (/ai[\s_]*insight|insight[\s_]*(enable|column|field)/.test(normalized)) return 'insight';
+      if (/filter[\s_]*(fields|columns|config)|smart[\s_]*filter[\s_]*fields|default[\s_]*filters|predefined[\s_]*filters|preset[\s_]*filters/.test(normalized)) return 'filters';
+      if (/default[\s_]*group[\s_]*by|default[\s_]*groups|group[\s_]*by|group[\s_]*fields|^columns$|layout[\s_]*columns|column[\s_]*count|label[\s_]*(position|layout)|column[\s_]*order|field[\s_]*order|columns[\s_]*order|visible[\s_]*(columns|fields)|hidden[\s_]*(columns|fields)|section[\s_]*layout|form[\s_]*sections|^sections$/.test(normalized)) return 'layout';
+      if (/nested[\s_]*table|nested[\s_]*tables|related[\s_]*table|related[\s_]*tables|relationship|parent|child/.test(normalized)) return 'nested';
+      if (/main[\s_]*display|display[\s_]*(name|field|column)|title[\s_]*field|record[\s_]*title|primary[\s_]*field/.test(normalized)) return 'display';
+      if (/note|description|detail|summary|comment|guide/.test(normalized)) return 'notes';
+      if (/color|theme|icon|style|layout|width|height|position|visible|label|title|subtitle/.test(normalized)) return 'design';
+      if (/table|sheet|range|source|target|nav|page|view|component|service/.test(normalized)) return 'binding';
+      if (/type|mode|status|sort|order|filter|condition|formula|rule|action|metric|permission|role/.test(normalized)) return 'behavior';
+      return 'identity';
+    }

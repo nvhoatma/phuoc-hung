@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><?= access.quotaLimited ? 'Temporary limit' : 'Access required' ?></title>
+  <style>
+    :root {
+      color-scheme: light;
+      --text: #20262d;
+      --muted: #66707a;
+      --line: #e3e7eb;
+      --panel: #ffffff;
+      --bg: #f6f8fa;
+      --accent: #7a4e1d;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, sans-serif;
+      padding: 24px;
+    }
+
+    main {
+      width: min(520px, 100%);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 24px;
+      box-shadow: 0 16px 42px rgba(32, 38, 45, .08);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    p {
+      margin: 0 0 14px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    a {
+      display: inline-flex;
+      min-height: 36px;
+      align-items: center;
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      color: #ffffff;
+      background: var(--accent);
+      padding: 0 12px;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    code {
+      display: block;
+      margin-top: 14px;
+      color: #8b949e;
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1><?= access.quotaLimited ? 'Google Sheets is temporarily busy' : 'Access required' ?></h1>
+    <? if (access.quotaLimited) { ?>
+      <p>The app hit a short Google Sheets read limit. Wait a few seconds, then reload this app.</p>
+      <p>Your access may be fine; this is usually a temporary Google quota throttle.</p>
+    <? } else { ?>
+      <p>This app uses its Google Sheet as the source of truth for access. Ask the sheet owner to share the data file with your Google account, then reload this app.</p>
+      <p>Viewer access can open the app. Editor access is required for creating, editing, or deleting rows.</p>
+    <? } ?>
+    <a href="<?= access.spreadsheetUrl ?>" target="_blank" rel="noopener">Open data file</a>
+    <? if (access.detail) { ?>
+      <code><?= access.detail ?></code>
+    <? } ?>
+  </main>
+</body>
+</html>

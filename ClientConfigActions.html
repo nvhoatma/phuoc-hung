@@ -1,0 +1,603 @@
+    /*
+      Config App event binding, field enhancements, save/delete, and navigation actions.
+    */
+    function bindConfigEvents() {
+      document.querySelectorAll('[data-config-type-toggle]').forEach((button) => {
+        button.addEventListener('click', () => toggleConfigType(button.dataset.configTypeToggle));
+      });
+      document.querySelectorAll('[data-config-group-toggle]').forEach((button) => {
+        button.addEventListener('click', () => toggleConfigGroup(button.dataset.configType, button.dataset.configGroup));
+      });
+      document.querySelectorAll('[data-config-item]').forEach((button) => {
+        button.addEventListener('click', () => selectConfigItem(button.dataset.configItem));
+      });
+      document.querySelectorAll('[data-config-row]').forEach((button) => {
+        button.addEventListener('click', () => {
+          state.configSelectedRowNumber = Number(button.dataset.configRow);
+          renderPage();
+        });
+      });
+      const search = document.getElementById('configSearchInput');
+      if (search) {
+        search.addEventListener('input', () => {
+          state.configQuery = search.value;
+          renderPage();
+        });
+      }
+      const pageFilter = document.getElementById('configPageFilter');
+      if (pageFilter) {
+        pageFilter.addEventListener('change', () => {
+          state.configPageFilter = pageFilter.value;
+          const rows = filteredConfigRows();
+          state.configSelectedRowNumber = rows.length ? rows[0].rowNumber : null;
+          renderPage();
+        });
+      }
+      const form = document.getElementById('configSettingsForm');
+      if (form) {
+        bindConfigFieldEnhancements(form);
+        form.addEventListener('input', () => refreshConfigPreviewFromForm(form));
+        form.addEventListener('change', () => refreshConfigPreviewFromForm(form));
+        form.addEventListener('submit', saveConfigSettings);
+      }
+      const deleteButton = document.querySelector('[data-delete-config-row]');
+      if (deleteButton) deleteButton.addEventListener('click', deleteConfigSettings);
+      const newButton = document.querySelector('[data-new-config-row]');
+      if (newButton) {
+        newButton.addEventListener('click', () => {
+          state.configSelectedRowNumber = null;
+          renderPage();
+        });
+      }
+      const fullButton = document.querySelector('[data-toggle-config-preview]');
+      if (fullButton) {
+        fullButton.addEventListener('click', () => {
+          state.configPreviewFull = !state.configPreviewFull;
+          renderPage();
+        });
+      }
+    }
+
+    function bindConfigFieldEnhancements(root) {
+      if (typeof enhanceSelectSearch === 'function') enhanceSelectSearch(root);
+
+      root.querySelectorAll('[data-config-toggle]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const hidden = button.parentElement.querySelector('[data-config-toggle-value]');
+          const next = !(hidden && hidden.value === 'TRUE');
+          if (hidden) hidden.value = next ? 'TRUE' : 'FALSE';
+          button.classList.toggle('active', next);
+          button.setAttribute('aria-pressed', next ? 'true' : 'false');
+          const label = button.querySelector('strong');
+          if (label) label.textContent = next ? 'On' : 'Off';
+          refreshConfigPreviewFromForm(root);
+        });
+      });
+
+      root.querySelectorAll('.config-color-picker').forEach((picker) => {
+        const hidden = picker.querySelector('[data-config-color-value]');
+        const color = picker.querySelector('[data-config-color]');
+        const text = picker.querySelector('[data-config-color-text]');
+        const sync = (value) => {
+          const normalized = normalizeConfigColor(value);
+          if (hidden) hidden.value = normalized;
+          if (color) color.value = normalized;
+          if (text) text.value = value || normalized;
+        };
+        if (color) color.addEventListener('input', () => sync(color.value));
+        if (text) text.addEventListener('change', () => sync(text.value));
+      });
+
+      root.querySelectorAll('[data-config-multi-select]').forEach((picker) => {
+        const hidden = picker.querySelector('[data-config-multi-value]');
+        const sync = () => {
+          const values = Array.from(picker.querySelectorAll('[data-config-multi-option]:checked')).map((input) => input.value);
+          if (hidden) hidden.value = values.join(', ');
+          picker.querySelectorAll('.config-multi-option').forEach((label) => {
+            const input = label.querySelector('[data-config-multi-option]');
+            label.classList.toggle('active', !!(input && input.checked));
+          });
+        };
+        picker.querySelectorAll('[data-config-multi-option]').forEach((input) => {
+          input.addEventListener('change', sync);
+        });
+      });
+
+      root.querySelectorAll('[data-config-column-order]').forEach((control) => {
+        const sync = () => syncColumnOrderControl(control);
+        let dragging = null;
+        control.querySelectorAll('[data-column-move]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const item = button.closest('[data-column-order-item]');
+            const direction = Number(button.dataset.columnMove || 0);
+            if (!item || !direction) return;
+            if (direction < 0 && item.previousElementSibling) {
+              item.parentElement.insertBefore(item, item.previousElementSibling);
+            } else if (direction > 0 && item.nextElementSibling) {
+              item.parentElement.insertBefore(item.nextElementSibling, item);
+            }
+            sync();
+          });
+        });
+        control.querySelectorAll('[data-column-visible]').forEach((input) => {
+          input.addEventListener('change', sync);
+        });
+        control.querySelectorAll('[data-column-order-item]').forEach((item) => {
+          item.addEventListener('dragstart', () => {
+            dragging = item;
+            item.classList.add('dragging');
+          });
+          item.addEventListener('dragend', () => {
+            item.classList.remove('dragging');
+            dragging = null;
+            sync();
+          });
+          item.addEventListener('dragover', (event) => {
+            event.preventDefault();
+            if (!dragging || dragging === item) return;
+            const rect = item.getBoundingClientRect();
+            const after = event.clientY > rect.top + rect.height / 2;
+            item.parentElement.insertBefore(dragging, after ? item.nextElementSibling : item);
+          });
+        });
+        sync();
+      });
+
+      root.querySelectorAll('[data-config-form-sections]').forEach((control) => {
+        bindFormSectionControl(control);
+      });
+
+      root.querySelectorAll('[data-config-filter-defaults]').forEach((control) => {
+        bindDefaultFilterControl(control);
+      });
+
+      root.querySelectorAll('[data-form-nested-builder]').forEach((builder) => {
+        bindFormNestedRelationshipBuilder(builder);
+      });
+    }
+
+    function bindFormNestedRelationshipBuilder(builder) {
+      const root = builder.closest('form');
+      const list = builder.querySelector('[data-form-nested-list]');
+      const select = builder.querySelector('[data-form-nested-add-select]');
+      const add = builder.querySelector('[data-form-nested-add]');
+      const bindRow = (row) => {
+        const remove = row.querySelector('[data-form-nested-remove]');
+        if (remove) {
+          remove.addEventListener('click', () => {
+            row.remove();
+            syncFormNestedRelationshipBuilder(builder);
+          });
+        }
+        row.querySelectorAll('[data-relationship-source-field], [data-relationship-target-field]').forEach((input) => {
+          input.addEventListener('change', () => refreshConfigPreviewFromForm(root));
+        });
+      };
+      builder.querySelectorAll('[data-form-relationship-row]').forEach(bindRow);
+      if (add && list && select) {
+        add.addEventListener('click', () => {
+          const nestedName = String(select.value || '').trim();
+          if (!nestedName) return;
+          const wrapper = document.createElement('div');
+          wrapper.innerHTML = renderFormRelationshipRowForNestedBuilder(builder, nestedName);
+          const row = wrapper.firstElementChild;
+          if (!row) return;
+          list.appendChild(row);
+          bindRow(row);
+          syncFormNestedRelationshipBuilder(builder);
+        });
+      }
+      syncFormNestedRelationshipBuilder(builder);
+    }
+
+    function renderFormRelationshipRowForNestedBuilder(builder, nestedName) {
+      const root = builder.closest('form');
+      const record = root ? collectConfigFormRecord(root) : {};
+      const sourceTable = getConfigTargetTable(record);
+      const sourceColumns = getSchemaColumns(sourceTable);
+      return renderFormRelationshipRow(sourceTable || {}, sourceColumns, nestedName);
+    }
+
+    function syncFormNestedRelationshipBuilder(builder) {
+      const rows = Array.from(builder.querySelectorAll('[data-form-relationship-row]'));
+      const selected = uniqueConfigOptions(rows.map((row) => row.dataset.formNestedItem || row.dataset.targetTable || '').filter(Boolean));
+      const hidden = builder.querySelector('[data-form-nested-value]');
+      if (hidden) hidden.value = selected.join(', ');
+      const count = builder.closest('details')?.querySelector('summary em');
+      if (count) count.textContent = selected.length;
+      const root = builder.closest('form');
+      const select = builder.querySelector('[data-form-nested-add-select]');
+      if (select) {
+        const record = root ? collectConfigFormRecord(root) : {};
+        const options = getNestedTableOptions(hidden ? hidden.value : selected.join(', '), record)
+          .filter((name) => !selected.some((item) => normalizeClientConfigKey(item) === normalizeClientConfigKey(name)));
+        select.innerHTML = `<option value="">Add nested table</option>${options.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join('')}`;
+      }
+      refreshConfigPreviewFromForm(root);
+    }
+
+    function parseFormSectionOptions(value) {
+      try {
+        const parsed = JSON.parse(value || '[]');
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (error) {
+        return [];
+      }
+    }
+
+    function bindFormSectionControl(control) {
+      const list = control.querySelector('[data-form-section-list]');
+      const columns = parseFormSectionOptions(control.dataset.fieldOptions || '[]');
+      const sync = (changedInput = null) => syncFormSectionControl(control, changedInput);
+      const bindRow = (row) => {
+        const toggle = row.querySelector('[data-section-toggle]');
+        if (toggle) {
+          toggle.addEventListener('click', () => {
+            row.classList.toggle('collapsed');
+            toggle.title = row.classList.contains('collapsed') ? 'Expand section' : 'Collapse section';
+            toggle.setAttribute('aria-label', toggle.title);
+          });
+        }
+        row.querySelectorAll('[data-section-move]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const current = button.closest('[data-form-section-row]');
+            const direction = Number(button.dataset.sectionMove || 0);
+            if (!current || !direction) return;
+            if (direction < 0 && current.previousElementSibling) {
+              current.parentElement.insertBefore(current, current.previousElementSibling);
+            } else if (direction > 0 && current.nextElementSibling) {
+              current.parentElement.insertBefore(current.nextElementSibling, current);
+            }
+            sync();
+          });
+        });
+        row.querySelectorAll('[data-section-field-move]').forEach((button) => {
+          button.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const current = button.closest('.config-section-field');
+            const direction = Number(button.dataset.sectionFieldMove || 0);
+            if (!current || !direction) return;
+            const selectedFields = Array.from(row.querySelectorAll('.config-section-field')).filter((field) => {
+              const input = field.querySelector('[data-form-section-field]');
+              return input && input.checked;
+            });
+            const currentIndex = selectedFields.indexOf(current);
+            const target = selectedFields[currentIndex + direction];
+            if (!target) return;
+            if (direction < 0) {
+              current.parentElement.insertBefore(current, target);
+            } else {
+              current.parentElement.insertBefore(target, current);
+            }
+            sync();
+          });
+        });
+        const remove = row.querySelector('[data-section-remove]');
+        if (remove) {
+          remove.addEventListener('click', () => {
+            row.remove();
+            sync();
+          });
+        }
+        row.querySelectorAll('[data-form-section-title]').forEach((input) => {
+          input.addEventListener('input', () => sync());
+          input.addEventListener('change', () => sync());
+        });
+        row.querySelectorAll('[data-form-section-field]').forEach((input) => {
+          input.addEventListener('change', () => sync(input));
+        });
+      };
+      control.querySelectorAll('[data-form-section-row]').forEach(bindRow);
+      const add = control.querySelector('[data-add-form-section]');
+      if (add && list) {
+        add.addEventListener('click', () => {
+          const wrapper = document.createElement('div');
+          wrapper.innerHTML = renderFormSectionEditorRow({
+            title: `Section ${list.children.length + 1}`,
+            fields: [],
+          }, list.children.length, columns, true);
+          const row = wrapper.firstElementChild;
+          if (!row) return;
+          list.appendChild(row);
+          bindRow(row);
+          sync();
+        });
+      }
+      sync();
+    }
+
+    function syncFormSectionControl(control, changedInput = null) {
+      const rows = Array.from(control.querySelectorAll('[data-form-section-row]'));
+      const sections = rows.map((row, index) => {
+        const titleInput = row.querySelector('[data-form-section-title]');
+        const title = (titleInput && titleInput.value ? titleInput.value : `Section ${index + 1}`).trim();
+        const fields = Array.from(row.querySelectorAll('[data-form-section-field]:checked'))
+          .map((input) => input.value)
+          .filter(Boolean);
+        row.querySelectorAll('.config-section-field').forEach((label) => {
+          const input = label.querySelector('[data-form-section-field]');
+          if (input) input.disabled = false;
+          label.classList.toggle('active', !!(input && input.checked));
+        });
+        const selectedLabels = Array.from(row.querySelectorAll('.config-section-field')).filter((label) => {
+          const input = label.querySelector('[data-form-section-field]');
+          return input && input.checked;
+        });
+        selectedLabels.forEach((label, selectedIndex) => {
+          label.querySelectorAll('[data-section-field-move]').forEach((button) => {
+            const direction = Number(button.dataset.sectionFieldMove || 0);
+            button.disabled = direction < 0 ? selectedIndex === 0 : selectedIndex === selectedLabels.length - 1;
+          });
+        });
+        row.querySelectorAll('[data-section-move]').forEach((button) => {
+          const direction = Number(button.dataset.sectionMove || 0);
+          button.disabled = direction < 0 ? index === 0 : index === rows.length - 1;
+        });
+        const count = row.querySelector('[data-section-field-count]');
+        if (count) count.textContent = `${fields.length} field${fields.length === 1 ? '' : 's'}`;
+        return { title, fields };
+      }).filter((section) => section.title || (section.fields && section.fields.length));
+      const hidden = control.querySelector('[data-form-sections-value]');
+      if (hidden) hidden.value = serializeConfigFormSections(sections);
+      refreshConfigPreviewFromForm(control.closest('form'));
+    }
+
+    function bindDefaultFilterControl(control) {
+      const list = control.querySelector('[data-filter-default-list]');
+      const columns = parseFormSectionOptions(control.dataset.filterFieldOptions || '[]');
+      const bindRow = (row) => {
+        row.querySelectorAll('[data-filter-default-field], [data-filter-default-values]').forEach((input) => {
+          input.addEventListener('input', () => syncDefaultFilterControl(control));
+          input.addEventListener('change', () => syncDefaultFilterControl(control));
+        });
+        const remove = row.querySelector('[data-remove-default-filter]');
+        if (remove) {
+          remove.addEventListener('click', () => {
+            row.remove();
+            syncDefaultFilterControl(control);
+          });
+        }
+      };
+      control.querySelectorAll('[data-filter-default-row]').forEach(bindRow);
+      const add = control.querySelector('[data-add-default-filter]');
+      if (add && list) {
+        add.addEventListener('click', () => {
+          const wrapper = document.createElement('div');
+          wrapper.innerHTML = renderDefaultFilterRow({ field: columns[0] || '', values: '' }, columns);
+          const row = wrapper.firstElementChild;
+          if (!row) return;
+          list.appendChild(row);
+          bindRow(row);
+          syncDefaultFilterControl(control);
+        });
+      }
+      syncDefaultFilterControl(control);
+    }
+
+    function syncDefaultFilterControl(control) {
+      const rows = Array.from(control.querySelectorAll('[data-filter-default-row]')).map((row) => {
+        const field = row.querySelector('[data-filter-default-field]');
+        const values = row.querySelector('[data-filter-default-values]');
+        return {
+          field: field ? field.value : '',
+          values: values ? values.value : '',
+        };
+      });
+      const hidden = control.querySelector('[data-filter-defaults-value]');
+      if (hidden) hidden.value = serializeConfigDefaultFilters(rows);
+      refreshConfigPreviewFromForm(control.closest('form'));
+    }
+
+    function syncColumnOrderControl(control) {
+      const items = Array.from(control.querySelectorAll('[data-column-order-item]'));
+      const orderValue = control.querySelector('[data-column-order-value]');
+      const hiddenValue = control.querySelector('[data-column-hidden-value]');
+      const order = [];
+      const hidden = [];
+      items.forEach((item, index) => {
+        const name = item.dataset.columnName || '';
+        const visible = item.querySelector('[data-column-visible]');
+        const isVisible = !!(visible && visible.checked);
+        if (name) order.push(name);
+        if (name && !isVisible) hidden.push(name);
+        item.classList.toggle('is-hidden', !isVisible);
+        item.querySelectorAll('[data-column-move]').forEach((button) => {
+          const direction = Number(button.dataset.columnMove || 0);
+          button.disabled = direction < 0 ? index === 0 : index === items.length - 1;
+        });
+      });
+      if (orderValue) orderValue.value = order.join(', ');
+      if (hiddenValue) hiddenValue.value = hidden.join(', ');
+      refreshConfigPreviewFromForm(control.closest('form'));
+    }
+
+    function selectConfigType(typeKey) {
+      state.configActiveType = typeKey;
+      state.configActiveGroup = getFirstConfigGroupKey(typeKey);
+      state.configCollapsedTypes[typeKey] = !state.configCollapsedTypes[typeKey];
+      renderPage();
+    }
+
+    function selectConfigGroup(groupKey) {
+      state.configActiveGroup = groupKey;
+      const collapseKey = `${state.configActiveType}:${groupKey}`;
+      state.configCollapsedGroups[collapseKey] = !state.configCollapsedGroups[collapseKey];
+      renderPage();
+    }
+
+    function toggleConfigType(typeKey) {
+      if (!typeKey) return;
+      state.configCollapsedTypes[typeKey] = !state.configCollapsedTypes[typeKey];
+      renderPage();
+    }
+
+    function toggleConfigGroup(typeKey, groupKey) {
+      if (!typeKey || !groupKey) return;
+      const collapseKey = `${typeKey}:${groupKey}`;
+      state.configCollapsedGroups[collapseKey] = !state.configCollapsedGroups[collapseKey];
+      renderPage();
+    }
+
+    function selectConfigItem(configKey) {
+      state.configQuery = '';
+      state.configSelectedRowNumber = null;
+      syncActiveConfigScope(configKey);
+      return loadConfigItem(configKey, { force: false });
+    }
+
+    function syncActiveConfigScope(configKey) {
+      const item = state.configBootstrap && state.configBootstrap.items
+        ? state.configBootstrap.items[configKey]
+        : null;
+      if (!item) return;
+      state.configActiveType = item.typeKey || state.configActiveType;
+      state.configActiveGroup = item.groupKey || state.configActiveGroup;
+      if (item.typeKey) state.configCollapsedTypes[item.typeKey] = false;
+      if (item.typeKey && item.groupKey) state.configCollapsedGroups[`${item.typeKey}:${item.groupKey}`] = false;
+    }
+
+    async function saveConfigSettings(event) {
+      event.preventDefault();
+      if (!state.configData || !state.activeConfigKey) return;
+      const relationshipPayload = state.activeConfigKey === 'form' ? collectFormRelationships(event.target) : [];
+      const relationshipScope = state.activeConfigKey === 'form' ? collectFormRelationshipScope(event.target) : {};
+      const formData = new FormData(event.target);
+      const existing = (getSelectedConfigRow() || {}).record || {};
+      const record = {};
+      (state.configData.headers || []).forEach((header) => {
+        record[header] = formData.has(header) ? (formData.get(header) || '') : (existing[header] || '');
+      });
+      setLoading(true);
+      try {
+        const result = await gasCall('saveConfigRecord', {
+          configKey: state.activeConfigKey,
+          rowNumber: state.configSelectedRowNumber,
+          record,
+        });
+        if (state.activeConfigKey === 'form' && (relationshipPayload.length || relationshipScope.sourceTable)) {
+          const relationshipResult = await gasCall('saveFormRelationships', {
+            relationships: relationshipPayload,
+            sourceTable: relationshipScope.sourceTable,
+            nestedTables: relationshipScope.nestedTables,
+          });
+          if (relationshipResult && relationshipResult.data) state.configDataCache['config:relationship'] = relationshipResult.data;
+          else delete state.configDataCache['config:relationship'];
+        }
+        applySavedConfigRecordToClientData(state.activeConfigKey, record, result);
+        state.userAppNeedsRefresh = true;
+        invalidatePersistentConfigCaches();
+        renderPage();
+        showToast('Config saved to Google Sheet');
+      } catch (error) {
+        showError(error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function collectFormRelationships(root) {
+      return Array.from(root.querySelectorAll('[data-form-relationship-row]')).map((row) => ({
+        sourceTable: row.dataset.sourceTable || '',
+        targetTable: row.dataset.targetTable || '',
+        sourceField: (row.querySelector('[data-relationship-source-field]') || {}).value || '',
+        targetField: (row.querySelector('[data-relationship-target-field]') || {}).value || '',
+      })).filter((item) => item.sourceTable && item.targetTable && item.sourceField && item.targetField);
+    }
+
+    function collectFormRelationshipScope(root) {
+      const hidden = root ? root.querySelector('[data-form-nested-value]') : null;
+      const record = root ? collectConfigFormRecord(root) : {};
+      const sourceTable = getConfigTargetTable(record);
+      return {
+        sourceTable: sourceTable ? sourceTable.name || '' : '',
+        nestedTables: hidden ? parseConfigMultiValue(hidden.value) : [],
+      };
+    }
+
+    function applySavedConfigRecordToClientData(configKey, record, result) {
+      const cacheKey = getConfigRuntimeCacheKey(configKey);
+      const data = state.configDataCache[cacheKey] || state.configData;
+      if (!data || !data.headers) return;
+      const rowNumber = Number(result && result.rowNumber) || Number(state.configSelectedRowNumber) || getNextConfigRowNumber(data);
+      const values = data.headers.map((header) => record[header] == null ? '' : record[header]);
+      const nextRow = {
+        rowNumber,
+        id: values[0] || `row-${rowNumber}`,
+        values,
+        record: { ...record },
+      };
+      const nextRows = [...(data.rows || [])];
+      const index = nextRows.findIndex((row) => Number(row.rowNumber) === rowNumber);
+      if (index >= 0) nextRows[index] = nextRow;
+      else nextRows.push(nextRow);
+      const nextData = { ...data, rows: nextRows, summary: updateClientSummary(data.summary, nextRows) };
+      state.configData = nextData;
+      state.configDataCache[cacheKey] = nextData;
+      state.configSelectedRowNumber = rowNumber;
+    }
+
+    function removeDeletedConfigRecordFromClientData(configKey, rowNumber) {
+      const cacheKey = getConfigRuntimeCacheKey(configKey);
+      const data = state.configDataCache[cacheKey] || state.configData;
+      if (!data) return;
+      const nextRows = (data.rows || []).filter((row) => Number(row.rowNumber) !== Number(rowNumber));
+      const nextData = { ...data, rows: nextRows, summary: updateClientSummary(data.summary, nextRows) };
+      state.configData = nextData;
+      state.configDataCache[cacheKey] = nextData;
+      state.configSelectedRowNumber = getDefaultConfigRowNumber(nextData);
+    }
+
+    function getNextConfigRowNumber(data) {
+      return (data.rows || []).reduce((max, row) => Math.max(max, Number(row.rowNumber || 0)), 0) + 1;
+    }
+
+    async function deleteConfigSettings() {
+      if (!state.activeConfigKey || !state.configSelectedRowNumber) return;
+      setLoading(true);
+      try {
+        const result = await gasCall('deleteConfigRecord', {
+          configKey: state.activeConfigKey,
+          rowNumber: state.configSelectedRowNumber,
+        });
+        removeDeletedConfigRecordFromClientData(state.activeConfigKey, state.configSelectedRowNumber);
+        state.userAppNeedsRefresh = true;
+        invalidatePersistentConfigCaches();
+        renderPage();
+        showToast('Config row cleared');
+      } catch (error) {
+        showError(error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function getActiveConfigType() {
+      return (state.configBootstrap.types || []).find((type) => type.key === state.configActiveType) || (state.configBootstrap.types || [])[0] || null;
+    }
+
+    function getActiveConfigGroup() {
+      const type = getActiveConfigType();
+      return type ? (type.groups || []).find((group) => group.key === state.configActiveGroup) || (type.groups || [])[0] || null : null;
+    }
+
+    function getActiveConfigItem() {
+      return state.configBootstrap && state.configBootstrap.items
+        ? state.configBootstrap.items[state.activeConfigKey] || null
+        : null;
+    }
+
+    function getFirstConfigTypeKey() {
+      return ((state.configBootstrap.types || [])[0] || {}).key || '';
+    }
+
+    function getFirstConfigGroupKey(typeKey) {
+      const type = (state.configBootstrap.types || []).find((entry) => entry.key === typeKey) || (state.configBootstrap.types || [])[0] || {};
+      return ((type.groups || [])[0] || {}).key || '';
+    }
+
+    function getFirstConfigItemKey(typeKey, groupKey) {
+      const type = (state.configBootstrap.types || []).find((entry) => entry.key === typeKey) || (state.configBootstrap.types || [])[0] || {};
+      const group = (type.groups || []).find((entry) => entry.key === groupKey) || (type.groups || [])[0] || {};
+      return ((group.items || [])[0] || {}).key || '';
+    }

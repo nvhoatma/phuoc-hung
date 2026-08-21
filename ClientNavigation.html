@@ -1,0 +1,128 @@
+    /*
+      Sidebar/navigation renderer only.
+      Navigation structure comes from server Navigation.js/Config.js.
+      Avoid adding table or page-specific behavior here.
+    */
+    function renderSidebar() {
+      document.querySelector('.app-shell').classList.toggle('sidebar-collapsed', state.sidebarCollapsed);
+      el.sidebar.innerHTML = `
+        <div class="brand">
+          <img class="brand-logo" src="${escapeAttr(getBrandLogoUrl())}" alt="${escapeAttr(getProcessName())}">
+          <div class="brand-title">
+            <strong>${escapeHtml(getProcessName())}</strong>
+          </div>
+          <button class="collapse-btn" type="button" data-collapse-sidebar aria-label="${state.sidebarCollapsed ? 'Open sidebar' : 'Close sidebar'}" title="${state.sidebarCollapsed ? 'Open sidebar' : 'Close sidebar'}">
+            ${state.sidebarCollapsed ? ICONS.expand : ICONS.collapse}
+          </button>
+        </div>
+        ${state.bootstrap.navigation.map(renderNavRoot).join('')}
+        ${renderAppModeSwitcher('sidebar-mode-switcher')}
+      `;
+      scheduleApplyLanguage();
+    }
+
+    function renderAppModeSwitcher(extraClass) {
+      const targetMode = state.appMode === 'config' ? 'user' : 'config';
+      const canSwitchMode = targetMode !== 'config' || canOpenConfigApp();
+      const label = targetMode === 'config' ? 'Config app' : 'User app';
+      const icon = targetMode === 'config' ? ICONS.gear : ICONS.userApp;
+      return `
+        <div class="app-mode-switcher ${extraClass || ''}" role="group" aria-label="App mode">
+          ${renderShellAppSlot()}
+          ${renderModeUtilityControl()}
+          ${canSwitchMode ? `<button class="mode-icon-switcher" type="button" data-app-mode="${targetMode}" title="${escapeAttr(label)}" aria-label="Switch to ${escapeAttr(label)}">
+            ${icon}<span>${escapeHtml(label)}</span>
+          </button>` : ''}
+        </div>
+      `;
+    }
+
+    function renderShellAppSlot() {
+      return `
+        <button class="mode-icon-switcher shell-app-slot" type="button" title="Shell app" aria-label="Shell app slot" disabled>
+          ${ICONS.shellApp}<span>Shell app</span>
+        </button>
+      `;
+    }
+
+    function renderModeUtilityControl() {
+      return `${renderHardRefreshButton()}${state.appMode === 'config' ? '' : renderLanguagePicker()}`;
+    }
+
+    function renderHardRefreshButton() {
+      return `
+        <button class="mode-icon-switcher hard-refresh-toggle" type="button" data-hard-refresh title="Hard refresh" aria-label="Clear cached data and settings, then reload app">
+          ${ICONS.hardRefresh}<span>Hard refresh</span>
+        </button>
+      `;
+    }
+
+    function renderLanguagePicker() {
+      return `
+        <div class="language-picker" data-language-picker>
+          <button class="mode-icon-switcher language-toggle" type="button" data-language-toggle title="Language" aria-label="Change language" aria-expanded="${state.languageMenuOpen ? 'true' : 'false'}">
+            ${ICONS.language}<span>Language</span>
+          </button>
+          <div class="language-menu" data-language-menu ${state.languageMenuOpen ? '' : 'hidden'} data-i18n-skip>
+            <button type="button" data-language-option="default"><span>A</span><strong>Default</strong></button>
+            <button type="button" data-language-option="vi"><span>VI</span><strong>Tiếng Việt</strong></button>
+            <button type="button" data-language-option="en"><span>EN</span><strong>English</strong></button>
+            <button type="button" data-language-option="zh"><span>中</span><strong>中文</strong></button>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderNavRoot(root) {
+      const id = getNavNodeId(root);
+      const collapsed = isNavCollapsed(root);
+      const dot = root.icon === 'overview'
+        ? '<span class="nav-dot overview">📊</span>'
+        : `<span class="nav-dot ${root.icon === 'business' || root.id === 'businessSetup' ? 'business' : 'operation'}"></span>`;
+      return `
+        <section class="nav-section">
+          <button class="nav-parent" type="button" data-nav-toggle="${escapeAttr(id)}" aria-expanded="${!collapsed}">
+            ${dot}<span>${escapeHtml(root.label)}</span>
+          </button>
+          <div class="nav-children ${collapsed ? 'collapsed' : ''}">
+            ${(root.children || []).map((child) => child.children ? renderNavGroup(child) : renderNavStep(child)).join('')}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderNavGroup(group) {
+      const id = getNavNodeId(group);
+      const collapsed = isNavCollapsed(group);
+      return `
+        <div class="nav-group ${collapsed ? 'collapsed' : ''}">
+          <button class="nav-group-title" type="button" data-nav-toggle="${escapeAttr(id)}" aria-expanded="${!collapsed}">
+            <span class="group-toggle-icon">${collapsed ? ICONS.chevronRight : ICONS.chevronDown}</span>
+            <span>${escapeHtml(group.label)}</span>
+          </button>
+          <div class="nav-group-children">
+            ${(group.children || []).map((child) => child.children ? renderNavGroup(child) : renderNavStep(child)).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderNavStep(step) {
+      const activeStep = state.routeLoading && state.pendingStep ? state.pendingStep : state.activeStep;
+      const active = activeStep && activeStep.id === step.id;
+      const cls = ['nav-item', active ? 'active' : '', step.disabled ? 'disabled' : ''].filter(Boolean).join(' ');
+      return `
+        <button class="${cls}" type="button" data-step-id="${escapeAttr(step.id)}" title="${escapeAttr(step.label)}" ${step.disabled ? 'disabled' : ''}>
+          <span>${escapeHtml(step.label)}</span>
+        </button>
+      `;
+    }
+
+    function getNavNodeId(item) {
+      return item.id || item.label || '';
+    }
+
+    function isNavCollapsed(item) {
+      return !!state.collapsedNav[getNavNodeId(item)];
+    }
+

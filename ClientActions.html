@@ -1,0 +1,1623 @@
+    /*
+      User actions and global event listeners.
+      Save/delete/drawer behavior belongs here. Shared helpers belong in
+      ClientHelpers.html; rendered control binding belongs near render code.
+    */
+    async function saveCurrentRecord(event) {
+      event.preventDefault();
+      if (!state.editing) return;
+      const formReadiness = getDrawerFormReadinessState();
+      if (formReadiness.loading) {
+        syncDrawerFormControls();
+        showToast('Please wait until the form and all select options finish loading before saving.');
+        return;
+      }
+      const editingData = getEditingTableData();
+      const editingTableKey = getEditingTableKey();
+      if (editingData && editingData.table && editingData.table.readOnly) {
+        showToast('This inherited table is read-only');
+        return;
+      }
+      if (state.editing.rowNumber && !canEditRows(editingTableKey)) {
+        showToast('Edit is disabled by app config');
+        return;
+      }
+      if (!state.editing.rowNumber && !canCreateRows(editingTableKey)) {
+        showToast('Create is disabled by app config');
+        return;
+      }
+      if (!isComponentEnabled('save', true)) {
+        showToast('Save is disabled by app config');
+        return;
+      }
+      if (el.recordForm && typeof el.recordForm.reportValidity === 'function' && !el.recordForm.reportValidity()) {
+        return;
+      }
+      const formData = new FormData(el.recordForm);
+      const record = {};
+      editingData.headers.forEach((header) => {
+        record[header] = formData.has(header)
+          ? formData.get(header) || ''
+          : (state.editing.record && state.editing.record[header]) || '';
+      });
+
+      const wasNestedEdit = !!state.editing.isNested;
+      const parentFrame = wasNestedEdit && state.drawerStack && state.drawerStack.length
+        ? cloneDrawerFrame(state.drawerStack[state.drawerStack.length - 1])
+        : null;
+      const pending = {
+        tableKey: editingTableKey,
+        rowNumber: state.editing.rowNumber,
+        record,
+        mode: state.editing.mode || 'quick',
+        nested: wasNestedEdit,
+        parentFrame,
+        requestId: `save-${Date.now()}-${++state.saveSequence}`,
+      };
+      pending.previousRow = getClientRowSnapshot(pending.tableKey, pending.rowNumber);
+      closeDrawer();
+      applyQueuedRecordToClientData(pending);
+      clearOverviewClientCache();
+      renderPage();
+      enqueueSaveRecord(pending);
+      showToast(getSaveQueueStatusText());
+    }
+
+    function enqueueSaveRecord(pending) {
+      state.saveQueue.push(pending);
+      processSaveQueue();
+    }
+
+    async function processSaveQueue() {
+      if (state.saveQueueRunning) return;
+      state.saveQueueRunning = true;
+      try {
+        while (state.saveQueue.length) {
+          const pending = state.saveQueue.shift();
+          pending.saving = true;
+          try {
+            const result = await gasCall('saveRecord', {
+              tableKey: pending.tableKey,
+              rowNumber: pending.rowNumber,
+              record: pending.record,
+            });
+            applySavedRecordToClientData(pending, result);
+            if (result && result.row) {
+              acknowledgeTableManifestVersion(pending.tableKey, result.tableVersion);
+            }
+            clearOverviewClientCache();
+            if (state.activeTableKey === pending.tableKey) renderPage();
+            if (pending.nested) refreshOpenDrawerNestedTables();
+            const savedId = result && result.recordId ? ` (ID: ${result.recordId})` : '';
+            showToast(getSaveQueueStatusText(`Saved to Google Sheet${savedId}`));
+          } catch (error) {
+            rollbackQueuedRecord(pending);
+            if (state.activeTableKey === pending.tableKey) {
+              renderPage();
+            }
+            reopenDrawerWithRecord(pending);
+            showError(error);
+          }
+        }
+      } finally {
+        state.saveQueueRunning = false;
+      }
+    }
+
+    function getSaveQueueStatusText(prefix) {
+      const waiting = state.saveQueue ? state.saveQueue.length : 0;
+      const active = state.saveQueueRunning ? 1 : 0;
+      const total = prefix ? waiting : waiting + active;
+      if (prefix && total > 0) return `${prefix}. ${total} save${total === 1 ? '' : 's'} still queued.`;
+      if (prefix) return prefix;
+      return total > 1 ? `${total} saves queued in background...` : 'Saving in background...';
+    }
+
+    function getClientRowSnapshot(tableKey, rowNumber) {
+      if (!rowNumber) return null;
+      const data = state.dataCache[getTableRuntimeCacheKey(tableKey)]
+        || (state.activeTableKey === tableKey ? state.tableData : null);
+      const row = data && data.rows ? data.rows.find((item) => Number(item.rowNumber) === Number(rowNumber)) : null;
+      return row ? {
+        rowNumber: row.rowNumber,
+        id: row.id,
+        values: (row.values || []).slice(),
+        record: { ...(row.record || {}) },
+      } : null;
+    }
+
+    function applyQueuedRecordToClientData(pending) {
+      const cacheKey = getTableRuntimeCacheKey(pending.tableKey);
+      const data = state.dataCache[cacheKey] || (state.activeTableKey === pending.tableKey ? state.tableData : null);
+      if (!data || !data.headers) return;
+      if (!pending.rowNumber) pending.clientRowNumber = getNextClientTempRowNumber();
+      applyRecordRowToClientData(pending, {
+        rowNumber: pending.rowNumber || pending.clientRowNumber,
+        pendingSave: true,
+      });
+    }
+
+    function applySavedRecordToClientData(pending, result) {
+      const rowNumber = Number(result && result.rowNumber) || Number(pending.rowNumber) || getNextClientRowNumber(
+        state.dataCache[getTableRuntimeCacheKey(pending.tableKey)] || state.tableData || { rows: [] }
+      );
+      const savedRow = result && result.row && result.row.record ? result.row : null;
+      if (savedRow) pending.record = { ...savedRow.record };
+      applyRecordRowToClientData(pending, {
+        rowNumber,
+        pendingSave: false,
+        row: savedRow,
+        persist: !!savedRow,
+      });
+    }
+
+    function applyRecordRowToClientData(pending, options) {
+      const cacheKey = getTableRuntimeCacheKey(pending.tableKey);
+      const data = state.dataCache[cacheKey] || (state.activeTableKey === pending.tableKey ? state.tableData : null);
+      if (!data || !data.headers) return;
+      const rowNumber = Number(options && options.rowNumber) || Number(pending.rowNumber) || pending.clientRowNumber || getNextClientRowNumber(data);
+      const authoritativeRow = options && options.row;
+      const values = authoritativeRow && Array.isArray(authoritativeRow.values)
+        ? authoritativeRow.values.slice()
+        : data.headers.map((header) => pending.record[header] == null ? '' : pending.record[header]);
+      const nextRow = authoritativeRow ? {
+        ...authoritativeRow,
+        rowNumber,
+        values,
+        record: { ...(authoritativeRow.record || pending.record) },
+      } : {
+        rowNumber,
+        id: values[0] || `row-${rowNumber}`,
+        values,
+        record: { ...pending.record },
+      };
+      if (options && options.pendingSave) nextRow.pendingSave = true;
+      const nextRows = [...(data.rows || [])];
+      const index = nextRows.findIndex((row) => (
+        Number(row.rowNumber) === rowNumber ||
+        (pending.clientRowNumber && Number(row.rowNumber) === Number(pending.clientRowNumber)) ||
+        (pending.rowNumber && Number(row.rowNumber) === Number(pending.rowNumber))
+      ));
+      if (index >= 0) nextRows[index] = nextRow;
+      else nextRows.push(nextRow);
+      const nextData = { ...data, rows: nextRows, summary: updateClientSummary(data.summary, nextRows) };
+      state.dataCache[cacheKey] = nextData;
+      if (state.activeTableKey === pending.tableKey) {
+        state.tableData = nextData;
+        bumpTableRenderVersion();
+      }
+      removeClientCache('tableInitial', pending.tableKey);
+      if (options && options.persist && isFullyLoadedClientTableData(pending.tableKey, nextData)) {
+        writePersistentFullTableData(pending.tableKey, nextData);
+      } else {
+        removeClientCache('tableFull', pending.tableKey);
+      }
+      if (!pending.rowNumber || Number(state.detailRowNumber) === Number(pending.clientRowNumber)) state.detailRowNumber = rowNumber;
+    }
+
+    function isFullyLoadedClientTableData(tableKey, data) {
+      const hydration = state.tableHydration[tableKey] || {};
+      const serverPage = data && data.serverPage ? data.serverPage : {};
+      return hydration.status === 'ready' || serverPage.fullyLoaded === true || serverPage.nextCursor === '';
+    }
+
+    function rollbackQueuedRecord(pending) {
+      const cacheKey = getTableRuntimeCacheKey(pending.tableKey);
+      const data = state.dataCache[cacheKey] || (state.activeTableKey === pending.tableKey ? state.tableData : null);
+      if (!data || !data.rows) return;
+      let nextRows;
+      if (pending.previousRow) {
+        nextRows = data.rows.map((row) => (
+          Number(row.rowNumber) === Number(pending.previousRow.rowNumber) ? pending.previousRow : row
+        ));
+      } else {
+        nextRows = data.rows.filter((row) => Number(row.rowNumber) !== Number(pending.clientRowNumber));
+      }
+      const nextData = { ...data, rows: nextRows, summary: updateClientSummary(data.summary, nextRows) };
+      state.dataCache[cacheKey] = nextData;
+      removeClientCache('tableInitial', pending.tableKey);
+      removeClientCache('tableFull', pending.tableKey);
+      if (state.activeTableKey === pending.tableKey) {
+        state.tableData = nextData;
+        bumpTableRenderVersion();
+      }
+    }
+
+    function getNextClientTempRowNumber() {
+      return -1 * (Date.now() + Number(state.saveSequence || 0));
+    }
+
+    function getNextClientRowNumber(data) {
+      return (data.rows || []).reduce((max, row) => Math.max(max, Number(row.rowNumber || 0)), 0) + 1;
+    }
+
+    function updateClientSummary(summary, rows) {
+      return Object.assign({}, summary || {}, { totalRows: rows.length, rowCount: rows.length });
+    }
+
+    async function deleteCurrentRecord() {
+      if (!state.editing || !state.editing.rowNumber) return;
+      const editingData = getEditingTableData();
+      const editingTableKey = getEditingTableKey();
+      if (editingData && editingData.table && editingData.table.readOnly) {
+        showToast('This inherited table is read-only');
+        return;
+      }
+      if (!canDeleteRows(editingTableKey)) {
+        showToast('Delete is disabled by app config');
+        return;
+      }
+      setLoading(true);
+      try {
+        const result = await gasCall('deleteRecord', {
+          tableKey: editingTableKey,
+          rowNumber: state.editing.rowNumber,
+          record: state.editing.record || {},
+        });
+        removeDeletedRecordFromClientData(editingTableKey, Number(result && result.rowNumber) || state.editing.rowNumber);
+        clearOverviewClientCache();
+        closeDrawer();
+        renderPage();
+        showToast('Record cleared from data range');
+      } catch (error) {
+        showError(error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function getRecordDeleteKey(tableKey, rowNumber) {
+      return `${tableKey || state.activeTableKey}:${Number(rowNumber || 0)}`;
+    }
+
+    function isRecordDeletePending(tableKey, rowNumber) {
+      return !!(state.pendingDelete && state.pendingDelete.key === getRecordDeleteKey(tableKey, rowNumber));
+    }
+
+    function setDeleteButtonConfirmState(tableKey, rowNumber, active) {
+      document.querySelectorAll(`[data-delete-row="${Number(rowNumber)}"]`).forEach((button) => {
+        if ((button.dataset.deleteTable || state.activeTableKey) !== (tableKey || state.activeTableKey)) return;
+        button.classList.toggle('confirm', !!active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
+    }
+
+    function clearPendingDeleteVisuals() {
+      document.querySelectorAll('[data-delete-row].confirm').forEach((button) => {
+        button.classList.remove('confirm');
+        button.setAttribute('aria-pressed', 'false');
+      });
+    }
+
+    function resetPendingDelete() {
+      state.pendingDelete = null;
+      clearPendingDeleteVisuals();
+    }
+
+    async function requestDeleteRecord(rowNumber, tableKey) {
+      const targetTableKey = tableKey || state.activeTableKey;
+      const data = state.dataCache[getTableRuntimeCacheKey(targetTableKey)]
+        || (targetTableKey === state.activeTableKey ? state.tableData : null);
+      const recordRowNumber = Number(rowNumber || 0);
+      const row = data && data.rows ? data.rows.find((item) => Number(item.rowNumber) === recordRowNumber) : null;
+      if (!recordRowNumber) return;
+      if (data && data.table && data.table.readOnly) {
+        showToast('This inherited table is read-only');
+        return;
+      }
+      if (!canDeleteRows(targetTableKey)) {
+        showToast('Delete is disabled by app config');
+        return;
+      }
+
+      const key = getRecordDeleteKey(targetTableKey, recordRowNumber);
+      const now = Date.now();
+      if (!state.pendingDelete || state.pendingDelete.key !== key || now - state.pendingDelete.at > 3600) {
+        resetPendingDelete();
+        state.pendingDelete = { key, tableKey: targetTableKey, rowNumber: recordRowNumber, at: now };
+        setDeleteButtonConfirmState(targetTableKey, recordRowNumber, true);
+        showToast('Click delete again to confirm');
+        window.setTimeout(() => {
+          if (state.pendingDelete && state.pendingDelete.key === key && Date.now() - state.pendingDelete.at >= 3400) {
+            resetPendingDelete();
+          }
+        }, 3700);
+        return;
+      }
+
+      await deleteRecordFromActiveView(targetTableKey, recordRowNumber, row ? row.record : {});
+    }
+
+    async function deleteRecordFromActiveView(tableKey, rowNumber, record) {
+      resetPendingDelete();
+      setLoading(true);
+      try {
+        const result = await gasCall('deleteRecord', { tableKey, rowNumber, record: record || {} });
+        removeDeletedRecordFromClientData(tableKey, Number(result && result.rowNumber) || rowNumber);
+        clearOverviewClientCache();
+        renderPage();
+        showToast('Record cleared from data range');
+      } catch (error) {
+        showError(error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function removeDeletedRecordFromClientData(tableKey, rowNumber) {
+      const cacheKey = getTableRuntimeCacheKey(tableKey);
+      const data = state.dataCache[cacheKey] || (state.activeTableKey === tableKey ? state.tableData : null);
+      if (!data) return;
+      const nextRows = (data.rows || []).filter((row) => Number(row.rowNumber) !== Number(rowNumber));
+      const nextData = { ...data, rows: nextRows, summary: updateClientSummary(data.summary, nextRows) };
+      state.dataCache[cacheKey] = nextData;
+      removeClientCache('tableInitial', tableKey);
+      removeClientCache('tableFull', tableKey);
+      if (state.activeTableKey === tableKey) {
+        state.tableData = nextData;
+        bumpTableRenderVersion();
+      }
+      if (Number(state.detailRowNumber) === Number(rowNumber)) {
+        const next = nextRows[0];
+        state.detailRowNumber = next ? next.rowNumber : null;
+      }
+    }
+
+    function closeDrawer() {
+      const shouldRestoreParent = !!(state.editing && state.editing.isNested && state.drawerStack && state.drawerStack.length);
+      state.editing = null;
+      state.editingTableData = null;
+      if (state.formFlowScrollCleanup) {
+        state.formFlowScrollCleanup();
+        state.formFlowScrollCleanup = null;
+      }
+      resetImportPanel();
+      if (shouldRestoreParent) {
+        const frame = state.drawerStack.pop();
+        restoreDrawerFrame(frame, { refreshNested: true });
+        return;
+      }
+      state.drawerStack = [];
+      if (el.drawerSubtitle) delete el.drawerSubtitle.dataset.readyText;
+      el.drawer.classList.remove('open');
+      el.drawer.classList.remove('advanced');
+      el.drawer.classList.remove('loading');
+      el.drawerBackdrop.classList.remove('open');
+      state.drawerLoading = false;
+      syncDrawerFormControls();
+      if (typeof enhanceImagePreviewSafe === 'function') {
+        window.setTimeout(() => enhanceImagePreviewSafe('detail'), 0);
+      }
+    }
+
+    function cloneDrawerFrame(frame) {
+      if (!frame) return null;
+      return {
+        editing: frame.editing ? { ...frame.editing, record: { ...(frame.editing.record || {}) } } : null,
+        editingTableData: frame.editingTableData || null,
+        title: frame.title || '',
+        subtitle: frame.subtitle || '',
+        deleteVisibility: frame.deleteVisibility || '',
+        saveDisplay: frame.saveDisplay || '',
+        importDisplay: frame.importDisplay || '',
+        advanced: !!frame.advanced,
+        scrollTop: Number(frame.scrollTop || 0),
+      };
+    }
+
+    function captureDrawerFrame() {
+      if (!state.editing || !el.drawer || !el.drawer.classList.contains('open')) return null;
+      const editing = {
+        ...state.editing,
+        record: typeof collectCurrentDrawerFormRecord === 'function'
+          ? collectCurrentDrawerFormRecord()
+          : { ...(state.editing.record || {}) },
+      };
+      return {
+        editing,
+        editingTableData: state.editingTableData || getEditingTableData(),
+        title: el.drawerTitle ? el.drawerTitle.textContent || '' : '',
+        subtitle: el.drawerSubtitle ? el.drawerSubtitle.textContent || '' : '',
+        deleteVisibility: el.deleteBtn ? el.deleteBtn.style.visibility || '' : '',
+        saveDisplay: el.saveBtn ? el.saveBtn.style.display || '' : '',
+        importDisplay: el.importBtn ? el.importBtn.style.display || '' : '',
+        advanced: el.drawer.classList.contains('advanced'),
+        scrollTop: el.recordForm ? el.recordForm.scrollTop || 0 : 0,
+      };
+    }
+
+    function pushDrawerFrame() {
+      const frame = captureDrawerFrame();
+      if (!frame) return false;
+      if (!Array.isArray(state.drawerStack)) state.drawerStack = [];
+      state.drawerStack.push(frame);
+      return true;
+    }
+
+    function restoreDrawerFrame(frame, options = {}) {
+      if (!frame || !frame.editing || !frame.editingTableData) {
+        state.drawerStack = [];
+        el.drawer.classList.remove('open');
+        el.drawer.classList.remove('advanced');
+        el.drawer.classList.remove('loading');
+        el.drawerBackdrop.classList.remove('open');
+        syncDrawerFormControls();
+        return;
+      }
+      state.editing = { ...frame.editing, record: { ...(frame.editing.record || {}) } };
+      state.editingTableData = frame.editingTableData;
+      state.drawerLoading = false;
+      if (el.drawerTitle) el.drawerTitle.textContent = frame.title || 'Record';
+      if (el.drawerSubtitle) el.drawerSubtitle.textContent = frame.subtitle || '';
+      if (el.deleteBtn) el.deleteBtn.style.visibility = frame.deleteVisibility || 'hidden';
+      if (el.saveBtn) el.saveBtn.style.display = frame.saveDisplay || '';
+      if (el.importBtn) el.importBtn.style.display = frame.importDisplay || '';
+      const mode = state.editing.mode || 'quick';
+      const data = frame.editingTableData;
+      el.recordForm.innerHTML = renderForm(data.fields || data.headers, state.editing.record, mode);
+      bindNestedTableButtons(el.recordForm);
+      if (typeof bindFormFlowSteps === 'function') bindFormFlowSteps(el.recordForm);
+      if (typeof resetImportPanel === 'function') resetImportPanel();
+      el.drawer.classList.toggle('advanced', !!frame.advanced);
+      el.drawer.classList.remove('loading');
+      el.drawer.classList.add('open');
+      el.drawerBackdrop.classList.add('open');
+      syncDrawerFormControls();
+      if (options.refreshNested) refreshOpenDrawerNestedTables();
+      if (typeof enhanceImagePreviewSafe === 'function') enhanceImagePreviewSafe('form');
+      scheduleApplyLanguage();
+      window.requestAnimationFrame(() => {
+        if (el.recordForm) el.recordForm.scrollTop = frame.scrollTop || 0;
+      });
+    }
+
+    function showDrawerLoading(title, subtitle, options = {}) {
+      state.drawerLoading = true;
+      if (el.drawerTitle) el.drawerTitle.textContent = title || 'Loading form';
+      if (el.drawerSubtitle) el.drawerSubtitle.textContent = subtitle || 'Preparing fields and config';
+      if (el.deleteBtn) el.deleteBtn.style.visibility = 'hidden';
+      if (el.saveBtn) el.saveBtn.style.display = 'none';
+      if (el.importBtn) el.importBtn.style.display = 'none';
+      if (el.recordForm) el.recordForm.innerHTML = renderDrawerLoadingBody(options.message || 'Loading form');
+      if (typeof resetImportPanel === 'function') resetImportPanel();
+      el.drawer.classList.toggle('advanced', !!options.advanced);
+      el.drawer.classList.add('loading');
+      el.drawer.classList.add('open');
+      el.drawerBackdrop.classList.add('open');
+      syncDrawerFormControls();
+      setLoading(true, options.message || 'Loading form');
+    }
+
+    function hideDrawerLoading() {
+      state.drawerLoading = false;
+      if (el.drawer) el.drawer.classList.remove('loading');
+      syncDrawerFormControls();
+      setLoading(false);
+    }
+
+    function renderDrawerLoadingBody(message) {
+      return `
+        <section class="drawer-loading-state" aria-live="polite">
+          <span class="drawer-loading-spinner"></span>
+          <strong>${escapeHtml(message || 'Loading form')}</strong>
+          <div class="drawer-loading-lines" aria-hidden="true">
+            <i></i><i></i><i></i><i></i>
+          </div>
+        </section>
+      `;
+    }
+
+    function refreshOpenDrawerNestedTables() {
+      if (!state.editing || state.editing.isNested || !el.drawer || !el.drawer.classList.contains('open')) return;
+      const mode = normalizeDrawerFormMode(state.editing.mode);
+      const formConfig = getActiveFormConfig({}, mode);
+      refreshDrawerNestedTables(formConfig);
+      loadNestedTablesForDrawerForm(mode);
+    }
+
+    function hydrateTableSchemaFromCacheForForms(tableKey, data) {
+      if (!tableKey || !data || !needsFullFieldSchema(data)) return data;
+      const cacheKey = getSchemaRuntimeCacheKey(tableKey);
+      const cached = state.metaCache[cacheKey] || readClientCache('meta', cacheKey, CLIENT_CACHE_TTL.meta);
+      if (!cached || cached.formulaAware !== true) return data;
+      state.metaCache[cacheKey] = cached;
+      return mergeTableFieldSchema(tableKey, data, cached);
+    }
+
+    async function prepareDrawerFormData(tableKey, data) {
+      if (!tableKey || !data) throw new Error('Form data is unavailable.');
+      await new Promise((resolve) => {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(resolve));
+      });
+      await hydrateDeferredUiConfig();
+      if (!state.uiConfigHydrated) {
+        throw new Error('Form configuration could not be loaded. Please try again.');
+      }
+      let prepared = hydrateTableSchemaFromCacheForForms(tableKey, data);
+      prepared = await ensureTableFieldSchemaForForms(tableKey, prepared);
+      if (!prepared || needsFullFieldSchema(prepared)) {
+        throw new Error('Form schema and select options could not be loaded. Please try again.');
+      }
+      return prepared;
+    }
+
+    function getEditingTableKey() {
+      return (state.editing && state.editing.tableKey) || state.activeTableKey;
+    }
+
+    function getEditingTableData() {
+      const tableKey = getEditingTableKey();
+      if (state.editingTableData && (!tableKey || (state.editingTableData.table && state.editingTableData.table.key === tableKey))) {
+        return state.editingTableData;
+      }
+      const cacheKey = tableKey ? getTableRuntimeCacheKey(tableKey) : '';
+      return cacheKey && state.dataCache[cacheKey]
+        ? state.dataCache[cacheKey]
+        : state.tableData;
+    }
+
+    function reopenDrawerWithRecord(pending) {
+      if (!pending) return;
+      const cacheKey = pending.tableKey ? getTableRuntimeCacheKey(pending.tableKey) : '';
+      const data = cacheKey && state.dataCache[cacheKey]
+        ? state.dataCache[cacheKey]
+        : state.tableData;
+      if (!data) return;
+      if (pending.nested && el.drawer && el.drawer.classList.contains('open') && state.editing && !state.editing.isNested) {
+        pushDrawerFrame();
+      } else if (pending.nested && pending.parentFrame && (!state.drawerStack || !state.drawerStack.length)) {
+        state.drawerStack = [cloneDrawerFrame(pending.parentFrame)];
+      }
+      const row = pending.rowNumber ? data.rows.find((item) => item.rowNumber === pending.rowNumber) : null;
+      state.editing = { tableKey: pending.tableKey || state.activeTableKey, rowNumber: pending.rowNumber || null, record: { ...pending.record }, mode: pending.mode || 'quick', isNested: !!pending.nested };
+      state.editingTableData = data;
+      el.drawerTitle.textContent = row ? row.values[0] || 'Edit record' : `New ${data.table.name}`;
+      el.drawerSubtitle.textContent = 'Save failed. Review and try again.';
+      el.deleteBtn.style.visibility = pending.rowNumber && canDeleteRows(pending.tableKey) ? 'visible' : 'hidden';
+      if (el.saveBtn) el.saveBtn.style.display = canSaveRecord(pending.rowNumber, pending.tableKey) ? '' : 'none';
+      el.recordForm.innerHTML = renderForm(data.fields || data.headers, state.editing.record, pending.mode || 'quick');
+      if (typeof bindFormFlowSteps === 'function') bindFormFlowSteps(el.recordForm);
+      resetImportPanel();
+      el.drawer.classList.toggle('advanced', pending.mode === 'full' || pending.mode === 'advanced');
+      el.drawer.classList.add('open');
+      el.drawerBackdrop.classList.add('open');
+      syncDrawerFormControls();
+      scheduleApplyLanguage();
+    }
+
+    function syncDrawerFormControls() {
+      const isOpen = !!(el.drawer && el.drawer.classList.contains('open') && state.editing);
+      const isNested = !!(state.editing && state.editing.isNested);
+      const isLoading = !!state.drawerLoading;
+      const formReadiness = getDrawerFormReadinessState();
+      const formLoading = isOpen && formReadiness.loading;
+      const mode = normalizeDrawerFormMode(state.editing && state.editing.mode);
+      const isAdvanced = mode === 'full';
+      const aiInsightEnabled = !!getActiveAiInsightConfig(
+        state.editingTableData && Array.isArray(state.editingTableData.headers) ? state.editingTableData.headers : []
+      ).enabled;
+      if (el.recordForm && typeof enhanceSelectSearch === 'function') enhanceSelectSearch(el.recordForm);
+      if (el.recordForm) el.recordForm.setAttribute('aria-busy', formLoading ? 'true' : 'false');
+      if (el.saveBtn) {
+        el.saveBtn.disabled = isLoading || formLoading;
+        el.saveBtn.textContent = formLoading ? 'Loading options...' : 'Save';
+        el.saveBtn.title = formLoading
+          ? formReadiness.message
+          : 'Save record';
+      }
+      if (el.drawerSubtitle && isOpen) {
+        if (formLoading) {
+          if (!el.drawerSubtitle.dataset.readyText) {
+            el.drawerSubtitle.dataset.readyText = el.drawerSubtitle.textContent || '';
+          }
+          el.drawerSubtitle.textContent = `${formReadiness.message} · Save will unlock when ready`;
+        } else if (el.drawerSubtitle.dataset.readyText) {
+          el.drawerSubtitle.textContent = el.drawerSubtitle.dataset.readyText;
+          delete el.drawerSubtitle.dataset.readyText;
+        }
+      }
+      if (el.aiInsightBtn) {
+        el.aiInsightBtn.style.display = isOpen && !isLoading && aiInsightEnabled ? '' : 'none';
+        el.aiInsightBtn.disabled = !isOpen || isLoading || !aiInsightEnabled;
+        el.aiInsightBtn.title = 'Copy AI context';
+        el.aiInsightBtn.setAttribute('aria-label', 'Copy AI context');
+      }
+      if (el.printFormBtn) {
+        el.printFormBtn.style.display = isOpen && !isLoading ? '' : 'none';
+        el.printFormBtn.disabled = !isOpen || isLoading;
+        el.printFormBtn.title = 'Export form as PNG';
+        el.printFormBtn.setAttribute('aria-label', 'Export form as PNG');
+      }
+      if (el.formModeToggleBtn) {
+        el.formModeToggleBtn.style.display = isOpen && !isNested && !isLoading ? '' : 'none';
+        el.formModeToggleBtn.disabled = !isOpen || isNested || isLoading;
+        el.formModeToggleBtn.innerHTML = isAdvanced
+          ? `${ICONS.edit || ICONS.table}<span>Quick</span>`
+          : `${ICONS.advancedEdit}<span>Advanced</span>`;
+        el.formModeToggleBtn.title = isAdvanced ? 'Switch to quick form' : 'Switch to advanced form';
+        el.formModeToggleBtn.setAttribute('aria-label', el.formModeToggleBtn.title);
+      }
+    }
+
+    function getDrawerFormReadinessState() {
+      if (!el.recordForm) return { loading: false, count: 0, message: '' };
+      const count = el.recordForm.querySelectorAll('select[data-select-options-loading="1"]').length;
+      const editingData = typeof getEditingTableData === 'function' ? getEditingTableData() : null;
+      const schemaLoading = !!(state.editing && editingData && needsFullFieldSchema(editingData));
+      const configLoading = !!(state.editing && !state.uiConfigHydrated);
+      const loading = count > 0 || schemaLoading || configLoading;
+      const message = count > 0
+        ? `Loading ${count} select field${count === 1 ? '' : 's'}`
+        : 'Loading form configuration and select options';
+      return { loading, count, schemaLoading, configLoading, message };
+    }
+
+    function buildViewAiInsightPayload() {
+      const row = getCurrentAiInsightViewRow();
+      const data = state.tableData || {};
+      if (!row || !data || !Array.isArray(data.headers) || !data.headers.length) return null;
+      const insightConfig = getActiveAiInsightConfig(data.headers);
+      if (!insightConfig.enabled) return null;
+      const title = getAiInsightRecordTitle(row.record, data.headers);
+      return {
+        title,
+        copiedText: getAiInsightCopyText(row.record, {
+          data,
+          headers: data.headers,
+          title,
+          insightConfig,
+        }),
+      };
+    }
+
+    function buildDrawerAiInsightPayload() {
+      if (!state.editing) return null;
+      const data = getEditingTableData();
+      if (!data || !Array.isArray(data.headers) || !data.headers.length) return null;
+      const insightConfig = getActiveAiInsightConfig(data.headers);
+      if (!insightConfig.enabled) return null;
+      const record = collectCurrentDrawerFormRecord();
+      const title = getAiInsightRecordTitle(record, data.headers);
+      return {
+        title,
+        copiedText: getAiInsightCopyText(record, {
+          data,
+          headers: data.headers,
+          title,
+          insightConfig,
+        }),
+      };
+    }
+
+    async function openAiInsightForCurrentView() {
+      const payload = buildViewAiInsightPayload();
+      if (!payload) {
+        showToast('No record available to copy');
+        return;
+      }
+      const copied = await copyTextToClipboard(payload.copiedText || '');
+      showToast(copied ? `Copied AI context for ${payload.title}` : 'Could not copy AI context');
+    }
+
+    async function openAiInsightForDrawerForm() {
+      const payload = buildDrawerAiInsightPayload();
+      if (!payload) {
+        showToast('No record available to copy');
+        return;
+      }
+      const copied = await copyTextToClipboard(payload.copiedText || '');
+      showToast(copied ? `Copied AI context for ${payload.title}` : 'Could not copy AI context');
+    }
+
+    function normalizeDrawerFormMode(mode) {
+      return mode === 'advanced' || mode === 'full' ? 'full' : 'quick';
+    }
+
+    function collectCurrentDrawerFormRecord() {
+      if (!state.editing) return {};
+      const data = getEditingTableData();
+      const record = { ...(state.editing.record || {}) };
+      const formData = el.recordForm ? new FormData(el.recordForm) : null;
+      const headers = data && Array.isArray(data.headers) ? data.headers : Object.keys(record);
+      headers.forEach((header) => {
+        if (formData && formData.has(header)) record[header] = formData.get(header) || '';
+        else if (!(header in record)) record[header] = '';
+      });
+      return record;
+    }
+
+    function switchDrawerFormMode() {
+      if (!state.editing || state.editing.isNested) return;
+      const data = getEditingTableData();
+      if (!data) return;
+      const currentMode = normalizeDrawerFormMode(state.editing.mode);
+      const nextMode = currentMode === 'full' ? 'quick' : 'full';
+      state.editing.record = collectCurrentDrawerFormRecord();
+      state.editing.mode = nextMode;
+      el.recordForm.innerHTML = renderForm(data.fields || data.headers, state.editing.record, nextMode);
+      bindNestedTableButtons(el.recordForm);
+      loadNestedTablesForDrawerForm(nextMode);
+      if (typeof bindFormFlowSteps === 'function') bindFormFlowSteps(el.recordForm);
+      resetImportPanel();
+      el.drawer.classList.toggle('advanced', nextMode === 'full');
+      syncDrawerFormControls();
+      if (typeof enhanceImagePreviewSafe === 'function') enhanceImagePreviewSafe('form');
+      scheduleApplyLanguage();
+    }
+
+    async function printCurrentDrawerForm() {
+      if (!state.editing || !el.drawer || !el.drawer.classList.contains('open')) return;
+      state.editing.record = collectCurrentDrawerFormRecord();
+      if (el.printFormBtn) el.printFormBtn.disabled = true;
+      try {
+        showToast('Preparing PNG');
+        const blob = await renderCurrentDrawerFormPng();
+        downloadBlob(blob, getCurrentDrawerFormPrintFilename());
+        showToast('PNG downloaded');
+      } catch (error) {
+        console.error('PNG export failed:', error);
+        showToast('Could not export PNG');
+      } finally {
+        if (el.printFormBtn) el.printFormBtn.disabled = false;
+      }
+    }
+
+    async function renderCurrentDrawerFormPng() {
+      try {
+        return await renderDrawerFormSvgPng();
+      } catch (error) {
+        console.warn('SVG PNG export failed, using canvas fallback:', error);
+        return renderDrawerFormCanvasPng();
+      }
+    }
+
+    async function renderDrawerFormSvgPng() {
+      const source = el.drawer;
+      if (!source) throw new Error('Drawer not found');
+      const header = source.querySelector('.drawer-header');
+      const body = source.querySelector('.drawer-body');
+      const headerHeight = header ? Math.ceil(header.getBoundingClientRect().height) : 0;
+      const width = Math.ceil(Math.max(source.scrollWidth, source.getBoundingClientRect().width));
+      const height = Math.ceil(Math.max(
+        source.scrollHeight,
+        source.getBoundingClientRect().height,
+        headerHeight + (body ? body.scrollHeight : 0)
+      ));
+      const clone = source.cloneNode(true);
+      inlineComputedStylesForPng(source, clone);
+      prepareDrawerPrintClone(clone, width, height);
+      const xhtml = new XMLSerializer().serializeToString(clone);
+      const svg = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+          <foreignObject width="100%" height="100%">
+            <div xmlns="http://www.w3.org/1999/xhtml">${xhtml}</div>
+          </foreignObject>
+        </svg>
+      `;
+      const image = await loadSvgAsImage(svg);
+      const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(width * scale);
+      canvas.height = Math.ceil(height * scale);
+      const context = canvas.getContext('2d');
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.setTransform(scale, 0, 0, scale, 0, 0);
+      context.drawImage(image, 0, 0, width, height);
+      return new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('PNG export returned empty blob')), 'image/png');
+      });
+    }
+
+    function prepareDrawerPrintClone(clone, width, height) {
+      clone.classList.add('drawer-png-export');
+      clone.style.position = 'static';
+      clone.style.transform = 'none';
+      clone.style.width = `${width}px`;
+      clone.style.height = `${height}px`;
+      clone.style.maxWidth = 'none';
+      clone.style.maxHeight = 'none';
+      clone.style.overflow = 'visible';
+      clone.querySelectorAll('.drawer-header-actions, .drawer-footer, .import-panel').forEach((node) => node.remove());
+      clone.querySelectorAll('.drawer-body, #recordForm').forEach((node) => {
+        node.style.overflow = 'visible';
+        node.style.maxHeight = 'none';
+        node.style.height = 'auto';
+      });
+      clone.querySelectorAll('img').forEach((image) => {
+        image.removeAttribute('src');
+        image.removeAttribute('srcset');
+        image.style.background = '#f3f5f7';
+      });
+      clone.querySelectorAll('input, textarea, select').forEach((input) => syncFormControlCloneValue(input));
+    }
+
+    function syncFormControlCloneValue(input) {
+      if (input.tagName === 'TEXTAREA') {
+        input.textContent = input.value || '';
+        return;
+      }
+      if (input.tagName === 'SELECT') {
+        Array.from(input.options || []).forEach((option) => {
+          if (option.selected) option.setAttribute('selected', 'selected');
+          else option.removeAttribute('selected');
+        });
+        return;
+      }
+      if (input.type === 'checkbox' || input.type === 'radio') {
+        if (input.checked) input.setAttribute('checked', 'checked');
+        else input.removeAttribute('checked');
+        return;
+      }
+      input.setAttribute('value', input.value || '');
+    }
+
+    function inlineComputedStylesForPng(source, clone) {
+      const sourceNodes = [source].concat(Array.from(source.querySelectorAll('*')));
+      const cloneNodes = [clone].concat(Array.from(clone.querySelectorAll('*')));
+      sourceNodes.forEach((sourceNode, index) => {
+        const cloneNode = cloneNodes[index];
+        if (!cloneNode || sourceNode.nodeType !== 1) return;
+        const styles = window.getComputedStyle(sourceNode);
+        let css = '';
+        for (let styleIndex = 0; styleIndex < styles.length; styleIndex += 1) {
+          const property = styles[styleIndex];
+          const value = styles.getPropertyValue(property);
+          if (/url\(/i.test(value)) continue;
+          css += `${property}:${value};`;
+        }
+        cloneNode.setAttribute('style', `${css}${cloneNode.getAttribute('style') || ''}`);
+      });
+    }
+
+    async function loadSvgAsImage(svg) {
+      try {
+        return await loadSvgBlobAsImage(svg);
+      } catch (error) {
+        return loadSvgDataUrlAsImage(svg);
+      }
+    }
+
+    function loadSvgBlobAsImage(svg) {
+      return new Promise((resolve, reject) => {
+        const image = new Image();
+        const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        image.onload = () => {
+          URL.revokeObjectURL(url);
+          resolve(image);
+        };
+        image.onerror = (error) => {
+          URL.revokeObjectURL(url);
+          reject(error);
+        };
+        image.src = url;
+      });
+    }
+
+    function loadSvgDataUrlAsImage(svg) {
+      return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = reject;
+        image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+      });
+    }
+
+    async function renderDrawerFormCanvasPng() {
+      const source = el.drawer;
+      if (!source) throw new Error('Drawer not found');
+      const body = source.querySelector('.drawer-body');
+      const previousScrollTop = body ? body.scrollTop : 0;
+      if (body) body.scrollTop = 0;
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+      try {
+        const rect = source.getBoundingClientRect();
+        const header = source.querySelector('.drawer-header');
+        const headerHeight = header ? Math.ceil(header.getBoundingClientRect().height) : 0;
+        const width = Math.ceil(Math.max(source.scrollWidth, rect.width));
+        const height = Math.ceil(Math.max(headerHeight + (body ? body.scrollHeight : 0), rect.height));
+        const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.ceil(width * scale);
+        canvas.height = Math.ceil(height * scale);
+        const context = canvas.getContext('2d');
+        context.setTransform(scale, 0, 0, scale, 0, 0);
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, width, height);
+        drawDrawerHeaderForPng(context, source, width);
+        drawDrawerFormForPng(context, source, headerHeight);
+        drawNestedTablesForPng(context, source, headerHeight);
+        return await canvasToPngBlob(canvas);
+      } finally {
+        if (body) body.scrollTop = previousScrollTop;
+      }
+    }
+
+    function drawDrawerHeaderForPng(context, source, width) {
+      const header = source.querySelector('.drawer-header');
+      const headerRect = header ? header.getBoundingClientRect() : { height: 74 };
+      const title = (el.drawerTitle && el.drawerTitle.textContent) || 'Record';
+      const subtitle = (el.drawerSubtitle && el.drawerSubtitle.textContent) || '';
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, width, headerRect.height || 74);
+      context.strokeStyle = '#e5e9ee';
+      context.beginPath();
+      context.moveTo(0, headerRect.height || 74);
+      context.lineTo(width, headerRect.height || 74);
+      context.stroke();
+      context.fillStyle = '#20262d';
+      context.font = '700 22px Arial, sans-serif';
+      drawWrappedCanvasText(context, title, 22, 28, width - 44, 28, 2);
+      if (subtitle) {
+        context.fillStyle = '#687380';
+        context.font = '400 14px Arial, sans-serif';
+        drawWrappedCanvasText(context, subtitle, 22, 54, width - 44, 20, 1);
+      }
+    }
+
+    function drawDrawerFormForPng(context, source, headerHeight) {
+      const body = source.querySelector('.drawer-body');
+      const form = source.querySelector('#recordForm');
+      if (!body || !form) return;
+      const bodyRect = body.getBoundingClientRect();
+      Array.from(form.querySelectorAll('.form-section')).forEach((section) => {
+        const sectionRect = section.getBoundingClientRect();
+        const x = Math.round(sectionRect.left - bodyRect.left);
+        const y = Math.round(sectionRect.top - bodyRect.top + headerHeight);
+        const width = Math.round(sectionRect.width);
+        const height = Math.round(sectionRect.height);
+        drawRoundRect(context, x, y, width, height, 8, '#ffffff', '#e3e7eb');
+        const title = section.querySelector('.form-section-title');
+        if (title) {
+          context.fillStyle = '#6b7280';
+          context.font = '700 11px Arial, sans-serif';
+          context.fillText((title.textContent || '').toUpperCase(), x + 14, y + 30);
+        }
+        Array.from(section.querySelectorAll('.form-control')).forEach((control) => {
+          drawFormControlForPng(context, control, bodyRect, headerHeight);
+        });
+      });
+    }
+
+    function drawNestedTablesForPng(context, source, headerHeight) {
+      const body = source.querySelector('.drawer-body');
+      if (!body) return;
+      const bodyRect = body.getBoundingClientRect();
+      Array.from(source.querySelectorAll('.nested-table-section')).forEach((section) => {
+        const sectionRect = section.getBoundingClientRect();
+        const x = Math.round(sectionRect.left - bodyRect.left);
+        const y = Math.round(sectionRect.top - bodyRect.top + headerHeight);
+        const width = Math.round(sectionRect.width);
+        context.fillStyle = '#6b7280';
+        context.font = '700 12px Arial, sans-serif';
+        const title = section.querySelector('.nested-table-title');
+        context.fillText(((title && title.textContent) || 'Nested tables').toUpperCase(), x, y + 16);
+        let cursorY = y + 34;
+        Array.from(section.querySelectorAll('.nested-table-card')).forEach((card) => {
+          const cardRect = card.getBoundingClientRect();
+          const cardHeight = Math.max(72, Math.round(cardRect.height));
+          drawRoundRect(context, x, cursorY, width, cardHeight, 8, '#ffffff', '#dfe4e9');
+          const name = card.querySelector('.nested-table-card-head strong, strong');
+          const meta = card.querySelector('.nested-table-card-head span, span');
+          context.fillStyle = '#20262d';
+          context.font = '700 16px Arial, sans-serif';
+          context.fillText((name && name.textContent ? name.textContent : 'Nested table'), x + 16, cursorY + 28);
+          if (meta && meta.textContent) {
+            context.fillStyle = '#687380';
+            context.font = '400 13px Arial, sans-serif';
+            context.fillText(meta.textContent, x + 16, cursorY + 48);
+          }
+          const note = card.querySelector('.nested-relationship-note');
+          if (note && note.textContent) {
+            context.fillStyle = '#7b8794';
+            context.font = '700 12px Arial, sans-serif';
+            context.fillText(note.textContent, x + 16, cursorY + 68);
+          }
+          const table = card.querySelector('.nested-table-preview-table');
+          if (table) {
+            drawNestedPreviewTableForPng(context, table, x + 16, cursorY + 86, width - 32);
+          } else {
+            const preview = card.querySelector('.nested-table-preview');
+            if (preview && preview.textContent) {
+              context.fillStyle = '#59636e';
+              context.font = '400 13px Arial, sans-serif';
+              drawWrappedCanvasText(context, preview.textContent.trim(), x + 16, cursorY + 88, width - 32, 18, 2);
+            }
+          }
+          cursorY += cardHeight + 12;
+        });
+      });
+    }
+
+    function drawNestedPreviewTableForPng(context, table, x, y, maxWidth) {
+      const headers = Array.from(table.querySelectorAll('thead th')).slice(0, 5).map((th) => th.textContent.trim()).filter(Boolean);
+      const rows = Array.from(table.querySelectorAll('tbody tr')).slice(0, 6);
+      const columnCount = Math.max(1, headers.length);
+      const columnWidth = Math.max(88, Math.floor(maxWidth / columnCount));
+      const rowHeight = 30;
+      context.fillStyle = '#f5f7f9';
+      context.fillRect(x, y, Math.min(maxWidth, columnWidth * columnCount), rowHeight);
+      context.strokeStyle = '#e1e6eb';
+      context.strokeRect(x, y, Math.min(maxWidth, columnWidth * columnCount), rowHeight);
+      context.fillStyle = '#59636e';
+      context.font = '700 11px Arial, sans-serif';
+      headers.forEach((header, index) => drawWrappedCanvasText(context, header, x + index * columnWidth + 8, y + 19, columnWidth - 16, 14, 1));
+      rows.forEach((row, rowIndex) => {
+        const rowY = y + rowHeight * (rowIndex + 1);
+        context.fillStyle = rowIndex % 2 ? '#ffffff' : '#fbfcfd';
+        context.fillRect(x, rowY, Math.min(maxWidth, columnWidth * columnCount), rowHeight);
+        context.strokeStyle = '#edf0f2';
+        context.strokeRect(x, rowY, Math.min(maxWidth, columnWidth * columnCount), rowHeight);
+        context.fillStyle = '#333b44';
+        context.font = '400 12px Arial, sans-serif';
+        Array.from(row.querySelectorAll('td')).slice(0, columnCount).forEach((cell, index) => {
+          drawWrappedCanvasText(context, cell.textContent.trim(), x + index * columnWidth + 8, rowY + 19, columnWidth - 16, 14, 1);
+        });
+      });
+    }
+
+    function drawFormControlForPng(context, control, bodyRect, headerHeight) {
+      const controlRect = control.getBoundingClientRect();
+      const x = Math.round(controlRect.left - bodyRect.left);
+      const y = Math.round(controlRect.top - bodyRect.top + headerHeight);
+      const width = Math.round(controlRect.width);
+      const label = control.querySelector('label, span');
+      const field = control.querySelector('input, textarea, select');
+      const labelText = label ? (label.textContent || '').trim() : '';
+      if (labelText) {
+        context.fillStyle = '#59636e';
+        context.font = '700 12px Arial, sans-serif';
+        drawWrappedCanvasText(context, labelText, x, y + 12, width, 16, 1);
+      }
+      const fieldY = y + 24;
+      const fieldHeight = Math.max(38, Math.min(130, field ? field.getBoundingClientRect().height : 38));
+      drawRoundRect(context, x, fieldY, width, fieldHeight, 6, '#fbfcfd', '#d8dee5');
+      const value = getFieldPngValue(field, control);
+      if (value) {
+        context.fillStyle = '#333b44';
+        context.font = '400 14px Arial, sans-serif';
+        drawWrappedCanvasText(context, value, x + 12, fieldY + 23, width - 24, 20, field && field.tagName === 'TEXTAREA' ? 5 : 1);
+      }
+    }
+
+    function getFieldPngValue(field, control) {
+      if (field) {
+        if (field.tagName === 'SELECT') return field.options && field.selectedIndex >= 0 ? field.options[field.selectedIndex].textContent || '' : '';
+        if (field.type === 'checkbox' || field.type === 'radio') return field.checked ? 'Checked' : '';
+        return field.value || '';
+      }
+      const text = (control.textContent || '').trim();
+      return text;
+    }
+
+    function drawRoundRect(context, x, y, width, height, radius, fill, stroke) {
+      context.beginPath();
+      if (typeof context.roundRect === 'function') context.roundRect(x, y, width, height, radius);
+      else context.rect(x, y, width, height);
+      context.fillStyle = fill || '#ffffff';
+      context.fill();
+      if (stroke) {
+        context.strokeStyle = stroke;
+        context.stroke();
+      }
+    }
+
+    function drawWrappedCanvasText(context, text, x, y, maxWidth, lineHeight, maxLines) {
+      const words = String(text || '').split(/\s+/).filter(Boolean);
+      let line = '';
+      let lineCount = 0;
+      words.forEach((word, index) => {
+        if (lineCount >= maxLines) return;
+        const test = line ? `${line} ${word}` : word;
+        if (context.measureText(test).width > maxWidth && line) {
+          context.fillText(line, x, y + lineCount * lineHeight);
+          line = word;
+          lineCount += 1;
+        } else {
+          line = test;
+        }
+        if (index === words.length - 1 && lineCount < maxLines) {
+          context.fillText(line, x, y + lineCount * lineHeight);
+          lineCount += 1;
+        }
+      });
+    }
+
+    function canvasToPngBlob(canvas) {
+      return new Promise((resolve, reject) => {
+        try {
+          canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('PNG export returned empty blob')), 'image/png');
+        } catch (error) {
+          reject(error);
+        }
+      });
+    }
+
+    function getCurrentDrawerFormPrintFilename() {
+      const rawTitle = (el.drawerTitle && el.drawerTitle.textContent) || 'form';
+      const safeTitle = String(rawTitle || 'form')
+        .trim()
+        .replace(/[\\/:*?"<>|]+/g, '-')
+        .replace(/\s+/g, '-')
+        .slice(0, 80) || 'form';
+      return `${safeTitle}.png`;
+    }
+
+    function downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename || 'form.png';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function toggleImportPanel() {
+      if (!state.tableData) return;
+      if (state.tableData.table && state.tableData.table.readOnly) {
+        showToast('This inherited table is read-only');
+        return;
+      }
+      if (!canImportRows()) {
+        showToast('Import is disabled by app config');
+        return;
+      }
+      const open = el.importPanel.hasAttribute('hidden');
+      el.importPanel.toggleAttribute('hidden', !open);
+      el.importBtn.classList.toggle('active', open);
+      if (open) {
+        resetImportDraft('No file selected');
+        window.setTimeout(() => el.importFileInput.focus(), 0);
+      }
+    }
+
+    function resetImportPanel() {
+      if (!el.importPanel) return;
+      el.importPanel.setAttribute('hidden', '');
+      el.importBtn.classList.remove('active');
+      resetImportDraft('No file selected');
+    }
+
+    function resetImportDraft(message) {
+      state.importDraft = null;
+      if (el.importFileInput) el.importFileInput.value = '';
+      if (el.importFileMeta) el.importFileMeta.textContent = message || 'No file selected';
+      if (el.runImportBtn) el.runImportBtn.disabled = true;
+    }
+
+    function downloadImportTemplate() {
+      if (!state.tableData) return;
+      if (state.tableData.table && state.tableData.table.readOnly) {
+        showToast('This inherited table is read-only');
+        return;
+      }
+      if (!canImportRows()) {
+        showToast('Import is disabled by app config');
+        return;
+      }
+      const table = state.tableData.table || {};
+      const fields = normalizeFormFields(state.tableData.fields || state.tableData.headers);
+      if (!fields.length) {
+        showToast('No fields available for import template');
+        return;
+      }
+
+      const rows = [
+        fields.map((field) => field.name),
+        fields.map(importExampleForField),
+      ];
+      const csv = `\ufeff${rows.map((row) => row.map(toCsvCell).join(',')).join('\r\n')}`;
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${safeFileName(table.name || state.activeTableKey || 'table')}-import-template.csv`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      showToast('Import template downloaded');
+    }
+
+    async function prepareImportFile(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) {
+        resetImportDraft('No file selected');
+        return;
+      }
+      try {
+        const text = await file.text();
+        const records = recordsFromCsv(text);
+        state.importDraft = { fileName: file.name, records };
+        el.importFileMeta.textContent = `${file.name} · ${records.length} row${records.length === 1 ? '' : 's'} ready`;
+        el.runImportBtn.disabled = records.length === 0;
+      } catch (error) {
+        resetImportDraft(error && error.message ? error.message : 'Could not read CSV');
+      }
+    }
+
+    async function importSelectedRows() {
+      if (!state.importDraft || !state.importDraft.records.length) {
+        showToast('Choose a CSV file first');
+        return;
+      }
+      if (state.tableData && state.tableData.table && state.tableData.table.readOnly) {
+        showToast('This inherited table is read-only');
+        return;
+      }
+      if (!canImportRows()) {
+        showToast('Import is disabled by app config');
+        return;
+      }
+      if (state.isImportingRows) return;
+      const pending = state.importDraft;
+      state.isImportingRows = true;
+      el.runImportBtn.disabled = true;
+      showToast(`Importing ${pending.records.length} rows...`);
+      try {
+        const result = await gasCall('importRecords', {
+          tableKey: state.activeTableKey,
+          records: pending.records,
+        });
+        applyImportedRecordsToClientData(state.activeTableKey, pending.records);
+        clearOverviewClientCache();
+        renderPage();
+        closeDrawer();
+        showToast(`Imported ${result.imported || pending.records.length} rows`);
+      } catch (error) {
+        showError(error);
+      } finally {
+        state.isImportingRows = false;
+        if (state.importDraft) el.runImportBtn.disabled = false;
+      }
+    }
+
+    function applyImportedRecordsToClientData(tableKey, records) {
+      const cacheKey = getTableRuntimeCacheKey(tableKey);
+      const data = state.dataCache[cacheKey] || (state.activeTableKey === tableKey ? state.tableData : null);
+      if (!data || !data.headers) return;
+      let nextRowNumber = getNextClientRowNumber(data);
+      const importedRows = (records || []).map((record) => {
+        const values = data.headers.map((header) => record[header] == null ? '' : record[header]);
+        const rowNumber = nextRowNumber++;
+        return {
+          rowNumber,
+          id: values[0] || `row-${rowNumber}`,
+          values,
+          record: { ...record },
+        };
+      });
+      const nextRows = (data.rows || []).concat(importedRows);
+      const nextData = { ...data, rows: nextRows, summary: updateClientSummary(data.summary, nextRows) };
+      state.dataCache[cacheKey] = nextData;
+      removeClientCache('tableInitial', tableKey);
+      removeClientCache('tableFull', tableKey);
+      if (state.activeTableKey === tableKey) {
+        state.tableData = nextData;
+        bumpTableRenderVersion();
+      }
+    }
+
+    function recordsFromCsv(text) {
+      const rows = parseCsvRows(text).filter((row) => row.some((cell) => String(cell || '').trim() !== ''));
+      if (rows.length < 2) throw new Error('CSV needs a header row and at least one data row');
+      const tableHeaders = state.tableData.headers || [];
+      const headerLookup = tableHeaders.reduce((lookup, header) => {
+        lookup[normalizeImportHeader(header)] = header;
+        return lookup;
+      }, {});
+      const csvHeaders = rows[0].map((header) => headerLookup[normalizeImportHeader(header)] || '');
+      const matchedCount = csvHeaders.filter(Boolean).length;
+      if (!matchedCount) throw new Error('CSV headers do not match this table');
+
+      return rows.slice(1).map((row) => {
+        const record = tableHeaders.reduce((draft, header) => {
+          draft[header] = '';
+          return draft;
+        }, {});
+        csvHeaders.forEach((header, index) => {
+          if (header) record[header] = row[index] == null ? '' : row[index];
+        });
+        return record;
+      }).filter((record) => Object.values(record).some((value) => String(value || '').trim() !== ''));
+    }
+
+    function parseCsvRows(text) {
+      const source = String(text || '').replace(/^\ufeff/, '');
+      const rows = [];
+      let row = [];
+      let value = '';
+      let quoted = false;
+      for (let index = 0; index < source.length; index += 1) {
+        const char = source[index];
+        const next = source[index + 1];
+        if (quoted) {
+          if (char === '"' && next === '"') {
+            value += '"';
+            index += 1;
+          } else if (char === '"') {
+            quoted = false;
+          } else {
+            value += char;
+          }
+        } else if (char === '"') {
+          quoted = true;
+        } else if (char === ',') {
+          row.push(value.trim());
+          value = '';
+        } else if (char === '\n') {
+          row.push(value.trim());
+          rows.push(row);
+          row = [];
+          value = '';
+        } else if (char !== '\r') {
+          value += char;
+        }
+      }
+      row.push(value.trim());
+      rows.push(row);
+      return rows;
+    }
+
+    function normalizeImportHeader(value) {
+      return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    }
+
+    function importExampleForField(field) {
+      const validation = field.validation || {};
+      const options = Array.isArray(validation.options) ? validation.options.filter(Boolean) : [];
+      if (options.length) return options[0];
+      const inputType = field.inputType || inputTypeForHeader(field.name);
+      if (inputType === 'date') return new Date().toISOString().slice(0, 10);
+      if (inputType === 'number') return '0';
+      return `Example ${field.label || field.name}`;
+    }
+
+    function toCsvCell(value) {
+      const text = String(value == null ? '' : value);
+      return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    }
+
+    function safeFileName(value) {
+      return String(value || 'table')
+        .trim()
+        .replace(/[\\/:*?"<>|]+/g, '-')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
+        .toLowerCase() || 'table';
+    }
+
+    async function openDrawer(rowNumber, mode = 'quick') {
+      let data = state.tableData;
+      if (!data || !data.table) return;
+      if (Number(rowNumber) < 0) {
+        showToast('This record is still saving. Try again after it finishes.');
+        return;
+      }
+      if (data.table && data.table.readOnly && !rowNumber) return;
+      if (!rowNumber && !canCreateRows()) return;
+      if (rowNumber && !canEditRows() && mode !== 'full' && mode !== 'advanced') return;
+      const formMode = mode === 'advanced' || mode === 'full' ? 'full' : 'quick';
+      const isAdvanced = formMode === 'full';
+      showDrawerLoading(rowNumber ? 'Loading record' : `New ${data.table.name}`, 'Preparing form fields', {
+        advanced: isAdvanced,
+        message: rowNumber ? 'Loading form' : 'Loading new form',
+      });
+      try {
+        data = await prepareDrawerFormData(state.activeTableKey, data);
+        const row = rowNumber ? data.rows.find((item) => item.rowNumber === rowNumber) : null;
+        const readOnly = data.table && data.table.readOnly;
+        state.editing = row
+          ? { tableKey: state.activeTableKey, rowNumber, record: { ...row.record }, mode: formMode }
+          : { tableKey: state.activeTableKey, rowNumber: null, record: {}, mode: formMode };
+        state.editingTableData = data;
+        el.drawerTitle.textContent = row ? getRowTitle(getVisibleHeaders(), row) || (readOnly ? 'View record' : 'Edit record') : `New ${data.table.name}`;
+        el.drawerSubtitle.textContent = data.table.binding === 'inheritedNativeTable'
+          ? `${data.table.sheetName} · inherited from ${data.table.apiTableName || data.table.name}`
+          : data.table.binding === 'nativeTable'
+          ? `${data.table.sheetName} · ${data.table.apiTableName || data.table.name}`
+          : `${data.table.sheetName} · Column ${columnName(data.table.dataStartColumn || 8)} onward`;
+        el.deleteBtn.style.visibility = row && !readOnly && canDeleteRows() ? 'visible' : 'hidden';
+        if (el.saveBtn) el.saveBtn.style.display = readOnly || !canSaveRecord(rowNumber) ? 'none' : '';
+        if (el.importBtn) el.importBtn.style.display = readOnly || !canImportRows() ? 'none' : '';
+        el.recordForm.innerHTML = renderForm(data.fields || data.headers, state.editing.record, formMode);
+        bindNestedTableButtons(el.recordForm);
+        loadNestedTablesForDrawerForm(formMode);
+        if (typeof bindFormFlowSteps === 'function') bindFormFlowSteps(el.recordForm);
+        if (typeof resetImportPanel === 'function') resetImportPanel();
+        el.drawer.classList.toggle('advanced', isAdvanced);
+        el.drawer.classList.add('open');
+        el.drawerBackdrop.classList.add('open');
+        syncDrawerFormControls();
+        if (typeof enhanceImagePreviewSafe === 'function') enhanceImagePreviewSafe('form');
+        scheduleApplyLanguage();
+      } catch (error) {
+        showError(error);
+        closeDrawer();
+      } finally {
+        hideDrawerLoading();
+      }
+    }
+
+    async function duplicateRecordFromRow(rowNumber) {
+      if (!state.tableData || Number(rowNumber) < 0) return;
+      if (state.tableData.table && state.tableData.table.readOnly) {
+        showToast('This inherited table is read-only');
+        return;
+      }
+      if (!canSaveRecord(null)) {
+        showToast('Create is disabled by app config');
+        return;
+      }
+      showDrawerLoading('Duplicate record', 'Preparing advanced form', {
+        advanced: true,
+        message: 'Loading duplicate form',
+      });
+      try {
+        const data = await prepareDrawerFormData(state.activeTableKey, state.tableData);
+        const row = data && data.rows ? data.rows.find((item) => Number(item.rowNumber) === Number(rowNumber)) : null;
+        if (!row) {
+          showToast('Record not found');
+          closeDrawer();
+          return;
+        }
+        const formMode = 'full';
+        const sourceTitle = getRowTitle(data.headers || [], row);
+        const record = makeDuplicateRecord(data, row, sourceTitle);
+        state.editing = {
+          tableKey: state.activeTableKey,
+          rowNumber: null,
+          record,
+          mode: formMode,
+          duplicatedFromRowNumber: row.rowNumber,
+        };
+        state.editingTableData = data;
+        el.drawerTitle.textContent = getRowTitle(data.headers || [], { record, rowNumber: null, id: '' }) || `Duplicate of ${sourceTitle}`;
+        el.drawerSubtitle.textContent = `New duplicate of ${sourceTitle}`;
+        el.deleteBtn.style.visibility = 'hidden';
+        if (el.saveBtn) el.saveBtn.style.display = canSaveRecord(null) ? '' : 'none';
+        if (el.importBtn) el.importBtn.style.display = canImportRows() ? '' : 'none';
+        el.recordForm.innerHTML = renderForm(data.fields || data.headers, state.editing.record, formMode);
+        bindNestedTableButtons(el.recordForm);
+        loadNestedTablesForDrawerForm(formMode);
+        if (typeof bindFormFlowSteps === 'function') bindFormFlowSteps(el.recordForm);
+        if (typeof resetImportPanel === 'function') resetImportPanel();
+        el.drawer.classList.add('advanced');
+        el.drawer.classList.add('open');
+        el.drawerBackdrop.classList.add('open');
+        syncDrawerFormControls();
+        if (typeof enhanceImagePreviewSafe === 'function') enhanceImagePreviewSafe('form');
+        scheduleApplyLanguage();
+      } catch (error) {
+        showError(error);
+        closeDrawer();
+      } finally {
+        hideDrawerLoading();
+      }
+    }
+
+    async function openNestedRecordDrawer(tableKey, rowNumber, seedRecord = {}) {
+      if (!tableKey) return;
+      if (el.drawer && el.drawer.classList.contains('open') && state.editing) pushDrawerFrame();
+      state.editing = { tableKey, rowNumber: rowNumber || null, record: { ...seedRecord }, mode: 'nested', isNested: true };
+      state.editingTableData = state.dataCache[getTableRuntimeCacheKey(tableKey)] || null;
+      showDrawerLoading(rowNumber ? 'Loading related row' : 'New related row', 'Preparing nested form', {
+        message: 'Loading nested form',
+      });
+      try {
+        let data = tableKey === state.activeTableKey && state.tableData
+          ? state.tableData
+          : state.dataCache[getTableRuntimeCacheKey(tableKey)];
+        if (!data) data = await fetchItemData({ tableKey });
+        if (!data) {
+          closeDrawer();
+          return;
+        }
+        data = await prepareDrawerFormData(tableKey, data);
+        const readOnly = data.table && data.table.readOnly;
+        if (!rowNumber && (readOnly || !canCreateRows(tableKey))) {
+          showToast(readOnly ? 'This inherited table is read-only' : 'Create is disabled by app config');
+          closeDrawer();
+          return;
+        }
+        if (rowNumber && !canEditRows(tableKey)) {
+          showToast('Edit is disabled by app config');
+          closeDrawer();
+          return;
+        }
+        const row = rowNumber ? data.rows.find((item) => item.rowNumber === rowNumber) : null;
+        const record = row ? { ...row.record } : { ...seedRecord };
+        state.editing = { tableKey, rowNumber: row ? row.rowNumber : null, record, mode: 'nested', isNested: true };
+        state.editingTableData = data;
+        el.drawerTitle.textContent = row ? row.values[0] || 'Edit related row' : `New ${data.table.name}`;
+        el.drawerSubtitle.textContent = `${data.table.sheetName || data.table.name} · related record`;
+        el.deleteBtn.style.visibility = row && !readOnly && canDeleteRows(tableKey) ? 'visible' : 'hidden';
+        if (el.saveBtn) el.saveBtn.style.display = readOnly || !canSaveRecord(row ? row.rowNumber : null, tableKey) ? 'none' : '';
+        if (el.importBtn) el.importBtn.style.display = 'none';
+        el.recordForm.innerHTML = renderForm(data.fields || data.headers, record, 'nested');
+        bindNestedTableButtons(el.recordForm);
+        if (typeof resetImportPanel === 'function') resetImportPanel();
+        el.drawer.classList.remove('advanced');
+        el.drawer.classList.add('open');
+        el.drawerBackdrop.classList.add('open');
+        syncDrawerFormControls();
+        if (typeof enhanceImagePreviewSafe === 'function') enhanceImagePreviewSafe('form');
+        scheduleApplyLanguage();
+      } catch (error) {
+        showError(error);
+        closeDrawer();
+      } finally {
+        hideDrawerLoading();
+      }
+    }
+
+    el.sidebar.addEventListener('click', (event) => {
+      const collapseButton = event.target.closest('[data-collapse-sidebar]');
+      if (collapseButton) {
+        state.sidebarCollapsed = !state.sidebarCollapsed;
+        setStoredPreference('sidebarCollapsed', state.sidebarCollapsed);
+        renderSidebar();
+        return;
+      }
+      const navToggle = event.target.closest('[data-nav-toggle]');
+      if (navToggle) {
+        const id = navToggle.dataset.navToggle;
+        state.collapsedNav[id] = !state.collapsedNav[id];
+        renderSidebar();
+        return;
+      }
+      const button = event.target.closest('[data-step-id]');
+      if (!button) return;
+      if (button.disabled || button.classList.contains('disabled')) return;
+      const found = findStepById(state.bootstrap.navigation, button.dataset.stepId);
+      if (!found) return;
+      el.sidebar.classList.remove('open');
+      loadItem(found.step);
+    });
+
+    el.mobileMenu.addEventListener('click', () => el.sidebar.classList.toggle('open'));
+    el.drawerBackdrop.addEventListener('click', closeDrawer);
+    el.closeDrawerBtn.addEventListener('click', closeDrawer);
+    el.recordForm.addEventListener('submit', saveCurrentRecord);
+    el.deleteBtn.addEventListener('click', deleteCurrentRecord);
+    el.aiInsightBtn.addEventListener('click', openAiInsightForDrawerForm);
+    el.formModeToggleBtn.addEventListener('click', switchDrawerFormMode);
+    el.printFormBtn.addEventListener('click', printCurrentDrawerForm);
+    el.importBtn.addEventListener('click', toggleImportPanel);
+    el.importTemplateBtn.addEventListener('click', downloadImportTemplate);
+    el.importFileInput.addEventListener('change', prepareImportFile);
+    el.runImportBtn.addEventListener('click', importSelectedRows);
+    document.addEventListener('click', (event) => {
+      const hardRefresh = event.target.closest('[data-hard-refresh]');
+      if (hardRefresh) {
+        event.preventDefault();
+        hardRefreshAppSettings();
+        return;
+      }
+      const languageToggle = event.target.closest('[data-language-toggle]');
+      if (languageToggle) {
+        event.preventDefault();
+        toggleLanguageMenu();
+        return;
+      }
+      const languageOption = event.target.closest('[data-language-option]');
+      if (languageOption) {
+        event.preventDefault();
+        setLanguage(languageOption.dataset.languageOption);
+        renderPage();
+        return;
+      }
+      if (!event.target.closest('[data-language-picker]') && state.languageMenuOpen) {
+        toggleLanguageMenu(false);
+      }
+      const button = event.target.closest('[data-app-mode]');
+      if (!button) return;
+      switchAppMode(button.dataset.appMode);
+    });
+
+    init();
+

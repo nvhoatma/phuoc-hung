@@ -1,0 +1,179 @@
+    /*
+      Mode switcher, Config App shell, config controls, previews, and remaining responsive overrides.
+    */
+    .app-mode-switcher {
+      position: fixed;
+      left: 14px;
+      bottom: 14px;
+      z-index: 60;
+      display: inline-flex;
+      gap: 8px;
+      padding: 12px 0 0;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      box-shadow: none;
+      backdrop-filter: blur(12px);
+    }
+
+    .sidebar-mode-switcher {
+      position: sticky;
+      left: auto;
+      bottom: 0;
+      z-index: 6;
+      width: max-content;
+      margin-top: auto;
+      align-self: flex-start;
+      box-shadow: none;
+    }
+
+    .sidebar-mode-switcher::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: calc(var(--sidebar-width) - 32px);
+      height: 1px;
+      background: rgba(89, 99, 110, .16);
+      pointer-events: none;
+    }
+
+    .app-shell.sidebar-collapsed .sidebar-mode-switcher::before {
+      width: calc(var(--sidebar-collapsed-width) - 20px);
+    }
+
+    .global-mode-switcher {
+      display: none;
+    }
+
+    body.config-mode .global-mode-switcher {
+      display: inline-flex;
+    }
+
+    .mode-icon-switcher {
+      width: 34px;
+      height: 34px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid #dfe4e9;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .95);
+      color: #59636e;
+      padding: 0;
+      box-shadow: 0 10px 22px rgba(52, 58, 64, .10);
+      transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
+    }
+
+    .mode-icon-switcher:hover {
+      border-color: var(--sand-200);
+      background: #fffaf3;
+      color: var(--walnut-700);
+      transform: translateY(-1px);
+    }
+
+    .mode-icon-switcher:disabled {
+      cursor: default;
+      color: #9aa4af;
+      opacity: .58;
+      pointer-events: none;
+    }
+
+    .shell-app-slot {
+      border-style: dashed;
+      background: rgba(255, 255, 255, .70);
+      box-shadow: 0 8px 18px rgba(52, 58, 64, .07);
+    }
+
+    .mode-icon-switcher svg {
+      width: 16px;
+      height: 16px;
+      stroke-width: 1.9;
+    }
+
+    .mode-icon-switcher span {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
+
+    .app-mode-switcher button.active {
+      color: var(--walnut-700);
+    }
+
+    .language-picker {
+      position: relative;
+      display: inline-flex;
+    }
+
+    .language-toggle.active,
+    .language-picker.open .language-toggle {
+      color: var(--walnut-700);
+      border-color: var(--sand-200);
+      background: #fffaf3;
+    }
+
+    .language-menu {
+      position: absolute;
+      left: 0;
+      bottom: calc(100% + 8px);
+      min-width: 138px;
+      display: grid;
+      gap: 3px;
+      padding: 5px;
+      border: 1px solid #dfe4e9;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, .98);
+      box-shadow: 0 16px 34px rgba(52, 58, 64, .14);
+      backdrop-filter: blur(14px);
+    }
+
+    .language-menu[hidden] {
+      display: none;
+    }
+
+    .language-menu button {
+      width: 100%;
+      min-height: 34px;
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: #4f5964;
+      text-align: left;
+      padding: 4px 7px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .language-menu button:hover,
+    .language-menu button.active {
+      color: var(--walnut-700);
+      background: #fbf7f1;
+    }
+
+    .language-menu button span {
+      width: 24px;
+      height: 24px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid #e6eaee;
+      border-radius: 999px;
+      color: inherit;
+      font-size: 10px;
+      line-height: 1;
+    }
+
+    .language-menu button strong {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font: inherit;
+    }
+

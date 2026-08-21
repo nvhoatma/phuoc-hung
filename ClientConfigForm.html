@@ -1,0 +1,780 @@
+    /*
+      Config App field controls, column/section/filter editors, and form option helpers.
+    */
+    function renderConfigField(field, value, record, validations) {
+      const fieldKey = normalizeClientConfigKey(field.name);
+      if ((state.activeConfigKey === 'view' || state.activeConfigKey === 'form') && ['hidden_columns', 'hide_columns', 'hidden_fields'].includes(fieldKey)) {
+        return '';
+      }
+      const validation = (validations && validations[field.name]) || field.validation || {};
+      const nature = getConfigFieldNature(field, value, record || {});
+      const options = nature.options || (Array.isArray(validation.options) ? validation.options : []);
+      const inputType = ['config_value', 'value', 'setting_value'].includes(normalizeClientConfigKey(field.name))
+        ? 'text'
+        : field.inputType || inputTypeForHeader(field.name);
+      const full = nature.type === 'columnOrder' || nature.type === 'defaultFilters' || field.group === 'notes' || /note|description|detail|summary|prompt|formula|condition|script|json/i.test(field.name);
+      const name = escapeAttr(field.name);
+      let control = '';
+      if (nature.type === 'boolean') {
+        const checked = configBoolValue(value, false);
+        control = `
+          <input type="hidden" name="${name}" value="${checked ? 'TRUE' : 'FALSE'}" data-config-toggle-value>
+          <button class="config-toggle ${checked ? 'active' : ''}" type="button" data-config-toggle aria-pressed="${checked ? 'true' : 'false'}">
+            <span></span>
+            <strong>${checked ? 'On' : 'Off'}</strong>
+          </button>
+        `;
+      } else if (nature.type === 'color') {
+        const color = normalizeConfigColor(value);
+        control = `
+          <div class="config-color-picker">
+            <input type="hidden" name="${name}" value="${escapeAttr(color)}" data-config-color-value>
+            <input type="color" value="${escapeAttr(color)}" data-config-color>
+            <input class="field" type="text" value="${escapeAttr(value || color)}" data-config-color-text>
+          </div>
+        `;
+      } else if (nature.type === 'multiSelect') {
+        const selected = nature.selected || parseConfigMultiValue(value);
+        const choices = uniqueConfigOptions([...(selected || []), ...(options || [])]);
+        control = `
+          <div class="config-multi-select" data-config-multi-select>
+            <input type="hidden" name="${name}" value="${escapeAttr(selected.join(', '))}" data-config-multi-value>
+            ${choices.length ? choices.map((option) => {
+              const checked = selected.some((item) => normalizeClientConfigKey(item) === normalizeClientConfigKey(option));
+              return `
+                <label class="config-multi-option ${checked ? 'active' : ''}">
+                  <input type="checkbox" value="${escapeAttr(option)}" data-config-multi-option${checked ? ' checked' : ''}>
+                  <span>${escapeHtml(option)}</span>
+                </label>
+              `;
+            }).join('') : `<div class="config-builder-empty">Choose a Page ID or table first so columns can be selected here.</div>`}
+          </div>
+        `;
+      } else if (nature.type === 'columnOrder') {
+        control = renderColumnOrderControl(field, value, record || {});
+      } else if (nature.type === 'formSections') {
+        control = renderFormSectionControl(field, value, record || {});
+      } else if (nature.type === 'defaultFilters') {
+        control = renderDefaultFilterControl(field, value, record || {});
+      } else if (options.length && (inputType === 'select' || nature.type === 'select')) {
+        control = `
+          <select class="field" name="${name}">
+            <option value=""></option>
+            ${options.map((option) => `<option value="${escapeAttr(option)}"${isConfigSelectOptionSelected(option, value, nature) ? ' selected' : ''}>${escapeHtml(option)}</option>`).join('')}
+          </select>
+        `;
+      } else if (/note|description|detail|summary|prompt|formula|condition|script|json/i.test(field.name)) {
+        control = `<textarea class="field" name="${name}">${escapeHtml(value)}</textarea>`;
+      } else if (/color|colour|hex/i.test(field.name)) {
+        control = `<div class="config-color-field"><input class="field" type="text" name="${name}" value="${escapeAttr(value)}"><span style="background:${escapeAttr(value || '#ffffff')}"></span></div>`;
+      } else {
+        const step = inputType === 'number' ? ' step="any"' : '';
+        control = `<input class="field" type="${escapeAttr(inputType)}" name="${name}" value="${escapeAttr(value)}"${step}>`;
+      }
+      const displayLabel = getConfigFieldDisplayLabel(field);
+      return `
+        <label class="config-field ${full ? 'full' : ''}">
+          ${displayLabel ? `<span>${escapeHtml(displayLabel)}</span>` : ''}
+          ${control}
+        </label>
+      `;
+    }
+
+    function getConfigFieldDisplayLabel(field) {
+      const key = normalizeClientConfigKey(field && field.name);
+      if (['title_column', 'record_title_column', 'record_name_column', 'display_name_column', 'display_column', 'main_display_name', 'main_display_field', 'display_name', 'display_field', 'title_field', 'record_title_field', 'primary_field', 'name_field'].includes(key)) {
+        return 'Title column';
+      }
+      if (['column_order', 'field_order', 'columns_order', 'section_layout', 'form_sections', 'sections'].includes(key)) return '';
+      return (field && (field.label || field.name)) || '';
+    }
+
+    function getConfigFieldNature(field, value, record) {
+      const fieldKey = normalizeClientNavText(field.name);
+      const configName = getRecordValueByHints(record, ['config_name', 'name', 'item', 'key']);
+      const configKey = normalizeClientNavText(configName);
+      const targetKey = fieldKey === 'config_value' || fieldKey === 'value' || fieldKey === 'setting_value'
+        ? configKey
+        : fieldKey;
+      const valueText = String(value || '');
+      if ((state.activeConfigKey === 'view' || state.activeConfigKey === 'form') && ['column_order', 'field_order', 'columns_order', 'visible_columns'].includes(targetKey)) {
+        return { type: 'columnOrder' };
+      }
+      if (['required', 'is_required', 'mandatory'].includes(targetKey)) {
+        return { type: 'select', options: ['*Required', 'Optional'], booleanSelect: true };
+      }
+      if ((state.activeConfigKey === 'view' || state.activeConfigKey === 'form') && ['section_layout', 'form_sections', 'sections'].includes(targetKey)) {
+        return { type: 'formSections' };
+      }
+      if (state.activeConfigKey === 'view' && ['filter_fields', 'filter_columns', 'smart_filter_fields'].includes(targetKey)) {
+        return { type: 'multiSelect', options: getViewFilterFieldOptions(record, value) };
+      }
+      if (state.activeConfigKey === 'view' && ['default_filters', 'predefined_filters', 'preset_filters', 'filter_config'].includes(targetKey)) {
+        return { type: 'defaultFilters' };
+      }
+      if (state.activeConfigKey === 'view' && ['default_sort', 'default_sort_field', 'sort_field', 'order_by'].includes(targetKey)) {
+        return { type: 'select', options: getDefaultSortFieldOptions(record, value) };
+      }
+      if (state.activeConfigKey === 'view' && ['default_sort_direction', 'sort_direction', 'order_direction'].includes(targetKey)) {
+        return { type: 'select', options: ['asc', 'desc'] };
+      }
+      if (state.activeConfigKey === 'page' && ['ai_insight_enable', 'insight_enable', 'enable_ai_insight'].includes(targetKey)) {
+        return { type: 'select', options: ['no', 'yes'] };
+      }
+      if (state.activeConfigKey === 'page' && ['ai_insight_column', 'insight_column', 'ai_column', 'insight_field'].includes(targetKey)) {
+        return { type: 'select', options: getAiInsightColumnOptions(record, valueText) };
+      }
+      if (state.activeConfigKey === 'form' && ['nested_table', 'nested_tables', 'related_table', 'related_tables'].includes(targetKey)) return { type: 'nestedRelationships' };
+      if ((state.activeConfigKey === 'page' || state.activeConfigKey === 'view' || state.activeConfigKey === 'form') && ['title_column', 'record_title_column', 'record_name_column', 'display_name_column', 'display_column', 'main_display_name', 'main_display_field', 'display_name', 'display_field', 'title_field', 'record_title_field', 'primary_field', 'name_field'].includes(targetKey)) {
+        return { type: 'select', options: getFormDisplayNameOptions(record, value) };
+      }
+      if (isBooleanConfigKey(targetKey) || isBooleanText(valueText)) return { type: 'boolean' };
+      if (/color|colour|accent|hex|brand/i.test(targetKey) || /^#[0-9a-f]{3,8}$/i.test(valueText.trim())) return { type: 'color' };
+      if (['default_landing_page', 'landing_page', 'start_page', 'home_page', 'default_page'].includes(targetKey)) {
+        return { type: 'select', options: getLandingPageOptions(valueText) };
+      }
+      if (isDefaultGroupByConfigKey(targetKey)) return { type: 'multiSelect', options: getDefaultGroupByOptions(record, value) };
+      if (['view_type', 'default_table_view', 'default_view', 'table_view'].includes(targetKey)) {
+        return { type: 'select', options: targetKey === 'view_type' ? ['table', 'detail', 'card', 'nested_form', 'form'] : ['table', 'detail', 'card'] };
+      }
+      if (['data_mode', 'data_mode_key', 'loading_mode', 'table_data_mode'].includes(targetKey)) {
+        return { type: 'select', options: ['full', 'paged'] };
+      }
+      if (['columns', 'layout_columns', 'column_count'].includes(targetKey)) return { type: 'select', options: ['1', '2', '3'] };
+      if (['form_type', 'form_layout_type', 'layout_type', 'flow_type'].includes(targetKey)) return { type: 'select', options: ['default', 'multi-step'] };
+      if (targetKey === 'mode' || targetKey === 'form_mode' || targetKey === 'edit_mode') return { type: 'select', options: ['quick', 'full', 'nested'] };
+      if (targetKey === 'label_position' || targetKey === 'label_layout') return { type: 'select', options: ['top', 'side'] };
+      if (targetKey === 'status') return { type: 'select', options: ['Active', 'Draft', 'Inactive'] };
+      if (targetKey === 'component_type') return { type: 'select', options: getComponentTypeOptions(record, valueText) };
+      if (targetKey === 'service_type') return { type: 'select', options: ['crud', 'config', 'report'] };
+      if (targetKey === 'item_type') return { type: 'select', options: ['group', 'table', 'overview'] };
+      return { type: 'text' };
+    }
+
+    function isConfigSelectOptionSelected(option, value, nature) {
+      if (nature && nature.booleanSelect && String(value || '').trim() !== '') {
+        return configBoolValue(option, false) === configBoolValue(value, false);
+      }
+      return normalizeClientNavText(option) === normalizeClientNavText(value);
+    }
+
+    function renderColumnOrderControl(field, value, record) {
+      const table = getConfigTargetTable(record);
+      const columns = getSchemaColumns(table);
+      const selected = parseConfigMultiValue(value);
+      const hiddenHints = getColumnOrderHiddenHints(field.name);
+      const hiddenHeader = findConfigDataHeaderByHints(hiddenHints);
+      const hiddenSelected = parseConfigMultiValue(getRecordValueByHints(record, hiddenHints));
+      const order = uniqueConfigOptions(selected.concat(columns));
+      const hiddenKeys = new Set(hiddenSelected.map(normalizeClientConfigKey));
+      return `
+        <div class="config-column-order" data-config-column-order>
+          <input type="hidden" name="${escapeAttr(field.name)}" value="${escapeAttr(order.join(', '))}" data-column-order-value>
+          ${hiddenHeader ? `<input type="hidden" name="${escapeAttr(hiddenHeader)}" value="${escapeAttr(hiddenSelected.join(', '))}" data-column-hidden-value>` : ''}
+          <details class="config-field-control-details">
+            <summary>
+              <span class="config-field-control-chevron">${ICONS.chevronDown}</span>
+              <strong>Default section</strong>
+              <em>Field control</em>
+            </summary>
+            <div class="config-column-order-list">
+              ${order.length ? order.map((column, index) => {
+                const checked = !hiddenKeys.has(normalizeClientConfigKey(column));
+                return `
+                  <div class="config-column-order-item ${checked ? '' : 'is-hidden'}" draggable="true" data-column-order-item data-column-name="${escapeAttr(column)}">
+                    <span class="config-column-grip">${ICONS.sliders}</span>
+                    <label>
+                      <input type="checkbox" data-column-visible${checked ? ' checked' : ''}>
+                      <strong>${escapeHtml(column)}</strong>
+                    </label>
+                    <div class="config-column-order-actions">
+                      <button type="button" data-column-move="-1" ${index === 0 ? 'disabled' : ''} title="Move up">${ICONS.chevronDown}</button>
+                      <button type="button" data-column-move="1" ${index === order.length - 1 ? 'disabled' : ''} title="Move down">${ICONS.chevronDown}</button>
+                    </div>
+                  </div>
+                `;
+              }).join('') : `<div class="config-builder-empty">Choose a Page ID or table first so columns can be selected here.</div>`}
+            </div>
+          </details>
+        </div>
+      `;
+    }
+
+    function getFormSectionColumnOptions(record, sections) {
+      const table = getConfigTargetTable(record);
+      const columns = getSchemaColumns(table);
+      const selected = (sections || []).reduce((acc, section) => acc.concat(section.fields || []), []);
+      return uniqueConfigOptions(selected.concat(columns));
+    }
+
+    function renderFormSectionControl(field, value, record) {
+      const storedSections = parseConfigFormSections(value);
+      const columns = getFormSectionColumnOptions(record, storedSections);
+      const sections = normalizeSimpleFormSections(storedSections, columns);
+      return `
+        <div class="config-form-sections" data-config-form-sections data-field-options="${escapeAttr(JSON.stringify(columns))}">
+          <input type="hidden" name="${escapeAttr(field.name)}" value="${escapeAttr(serializeConfigFormSections(sections))}" data-form-sections-value>
+          <div class="config-form-section-list" data-form-section-list>
+            ${sections.map((section, index) => renderFormSectionEditorRow(section, index, columns)).join('')}
+          </div>
+          <button class="config-add-section-btn" type="button" data-add-form-section>${ICONS.plus}<span>Add section</span></button>
+          ${columns.length ? '' : `<div class="config-builder-empty">Choose a Page ID or table first so section columns can be selected here.</div>`}
+        </div>
+      `;
+    }
+
+    function normalizeSimpleFormSections(storedSections, columns) {
+      const sections = (storedSections || []).map((section) => ({
+        title: section.title || 'Section',
+        fields: uniqueConfigOptions(section.fields || []),
+      }));
+      if (!sections.length) return [{ title: 'Default section', fields: columns || [] }];
+      const defaultIndex = sections.findIndex((section) => normalizeClientConfigKey(section.title) === 'default_section');
+      if (defaultIndex >= 0) {
+        const defaultSection = sections.splice(defaultIndex, 1)[0];
+        sections.unshift(Object.assign({}, defaultSection, { title: defaultSection.title || 'Default section' }));
+        return sections;
+      }
+      const assigned = new Set(sections.reduce((acc, section) => acc.concat(section.fields || []), []).map(normalizeClientConfigKey));
+      const defaultFields = (columns || []).filter((column) => !assigned.has(normalizeClientConfigKey(column)));
+      return [{ title: 'Default section', fields: defaultFields }].concat(sections);
+    }
+
+    function renderFormSectionEditorRow(section, index, columns, expanded = false) {
+      const columnMap = (columns || []).reduce((acc, column) => {
+        acc[normalizeClientConfigKey(column)] = column;
+        return acc;
+      }, {});
+      const selectedColumns = uniqueConfigOptions(section.fields || [])
+        .map((field) => columnMap[normalizeClientConfigKey(field)] || field)
+        .filter(Boolean);
+      const selected = new Set(selectedColumns.map(normalizeClientConfigKey));
+      const orderedColumns = selectedColumns.concat((columns || []).filter((column) => !selected.has(normalizeClientConfigKey(column))));
+      const selectedOrder = selectedColumns.map(normalizeClientConfigKey);
+      const selectedCount = (section.fields || []).length;
+      return `
+        <div class="config-form-section-row ${expanded ? '' : 'collapsed'}" data-form-section-row>
+          <div class="config-form-section-head">
+            <button class="config-section-toggle" type="button" data-section-toggle title="${expanded ? 'Collapse section' : 'Expand section'}" aria-label="${expanded ? 'Collapse section' : 'Expand section'}">${ICONS.chevronDown}</button>
+            <input class="field" type="text" value="${escapeAttr(section.title || `Section ${index + 1}`)}" placeholder="Section name" data-form-section-title>
+            <small data-section-field-count>${selectedCount} field${selectedCount === 1 ? '' : 's'}</small>
+            <div class="config-column-order-actions">
+              <button class="move-up" type="button" data-section-move="-1" ${index === 0 ? 'disabled' : ''} title="Move up">${ICONS.chevronDown}</button>
+              <button type="button" data-section-move="1" title="Move down">${ICONS.chevronDown}</button>
+              <button type="button" data-section-remove title="Remove section">x</button>
+            </div>
+          </div>
+          <div class="config-section-field-panel" data-section-panel>
+            <div class="config-section-field-picker">
+              ${orderedColumns.length ? orderedColumns.map((column) => {
+                const checked = selected.has(normalizeClientConfigKey(column));
+                const selectedIndex = selectedOrder.indexOf(normalizeClientConfigKey(column));
+                return `
+                  <div class="config-section-field ${checked ? 'active' : ''}">
+                    <label class="config-section-field-check">
+                      <input type="checkbox" value="${escapeAttr(column)}" data-form-section-field${checked ? ' checked' : ''}>
+                      <span>${escapeHtml(column)}</span>
+                    </label>
+                    <span class="config-section-field-actions">
+                      <button class="field-move-up" type="button" data-section-field-move="-1" ${selectedIndex <= 0 ? 'disabled' : ''} title="Move field up" aria-label="Move field up">${ICONS.chevronDown}</button>
+                      <button type="button" data-section-field-move="1" ${selectedIndex < 0 || selectedIndex >= selectedOrder.length - 1 ? 'disabled' : ''} title="Move field down" aria-label="Move field down">${ICONS.chevronDown}</button>
+                    </span>
+                  </div>
+                `;
+              }).join('') : `<div class="config-builder-empty">No columns available yet.</div>`}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function getViewFilterFieldOptions(record, value) {
+      const table = getConfigTargetTable(record);
+      const columns = getSchemaColumns(table);
+      return uniqueConfigOptions(parseConfigMultiValue(value).concat(columns));
+    }
+
+    function getDefaultSortFieldOptions(record, value) {
+      const table = getConfigTargetTable(record);
+      const columns = getSchemaColumns(table).filter((column) => !/photo|image|thumbnail|avatar|picture|file|attachment|note|detail|description|summary|comment|url|link/i.test(column));
+      const selected = String(value || '').trim();
+      return uniqueConfigOptions((selected ? [selected] : []).concat(columns));
+    }
+
+    function getAiInsightColumnOptions(record, value) {
+      const table = getConfigTargetTable(record);
+      const columns = getSchemaColumns(table);
+      const selected = String(value || '').trim();
+      return uniqueConfigOptions((selected ? [selected] : []).concat(columns));
+    }
+
+    function renderDefaultFilterControl(field, value, record) {
+      const columns = getViewFilterFieldOptions(record, '');
+      const rows = parseConfigDefaultFilterRows(value);
+      return `
+        <div class="config-filter-defaults" data-config-filter-defaults data-filter-field-options="${escapeAttr(JSON.stringify(columns))}">
+          <input type="hidden" name="${escapeAttr(field.name)}" value="${escapeAttr(serializeConfigDefaultFilters(rows))}" data-filter-defaults-value>
+          <div class="config-filter-default-list" data-filter-default-list>
+            ${(rows.length ? rows : [{ field: columns[0] || '', values: '' }]).map((row) => renderDefaultFilterRow(row, columns)).join('')}
+          </div>
+          <button class="config-add-section-btn" type="button" data-add-default-filter>${ICONS.plus}<span>Add filter</span></button>
+        </div>
+      `;
+    }
+
+    function renderDefaultFilterRow(row, columns) {
+      const field = row && row.field ? row.field : '';
+      const values = row && row.values ? row.values : '';
+      const options = uniqueConfigOptions((field ? [field] : []).concat(columns || []));
+      return `
+        <div class="config-filter-default-row" data-filter-default-row>
+          <select class="field" data-filter-default-field>
+            <option value=""></option>
+            ${options.map((option) => `<option value="${escapeAttr(option)}"${normalizeClientConfigKey(option) === normalizeClientConfigKey(field) ? ' selected' : ''}>${escapeHtml(option)}</option>`).join('')}
+          </select>
+          <input class="field" type="text" value="${escapeAttr(values)}" placeholder="Active | Pending" data-filter-default-values>
+          <button type="button" data-remove-default-filter title="Remove filter">x</button>
+        </div>
+      `;
+    }
+
+    function parseConfigDefaultFilterRows(value) {
+      return String(value || '')
+        .split(/[;\n]+/)
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .map((part) => {
+          const match = part.match(/^(.+?)(?:=>|=|:)(.+)$/);
+          if (!match) return null;
+          return {
+            field: match[1].trim(),
+            values: match[2].trim(),
+          };
+        })
+        .filter((row) => row && row.field);
+    }
+
+    function serializeConfigDefaultFilters(rows) {
+      return (rows || [])
+        .map((row) => {
+          const field = String(row.field || '').trim();
+          const values = String(row.values || '').trim();
+          return field && values ? `${field}=${values}` : '';
+        })
+        .filter(Boolean)
+        .join('; ');
+    }
+
+    function getFormDisplayNameOptions(record, value) {
+      const table = getConfigTargetTable(record);
+      const columns = getSchemaColumns(table);
+      const selected = String(value || '').trim();
+      return uniqueConfigOptions((selected ? [selected] : []).concat(columns));
+    }
+
+    function parseConfigFormSections(value) {
+      return normalizeConfigFormSectionLayoutText(value)
+        .split(/\n+/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const parts = line.split(':');
+          const title = (parts.shift() || '').trim();
+          const fields = parseConfigMultiValue(parts.join(':'));
+          return { title, fields };
+        })
+        .filter((section) => section.title);
+    }
+
+    function normalizeConfigFormSectionLayoutText(value) {
+      const text = String(value || '').replace(/\r\n?/g, '\n').trim();
+      if (!text) return '';
+      return text.replace(
+        /([^\n])\s+((?:step|section|phase|part|bước|buoc)\s*\d+\s*:)/gi,
+        '$1\n$2'
+      );
+    }
+
+    function serializeConfigFormSections(sections) {
+      return (sections || [])
+        .map((section) => {
+          const title = String(section.title || '').trim();
+          const fields = uniqueConfigOptions(section.fields || []);
+          return title ? `${title}: ${fields.join(', ')}` : '';
+        })
+        .filter(Boolean)
+        .join('\n');
+    }
+
+    function getColumnOrderHiddenHints(fieldName) {
+      const key = normalizeClientNavText(fieldName);
+      if (key.indexOf('quick_') === 0) return ['quick_hidden_columns', 'quick_hidden_fields'];
+      if (key.indexOf('full_') === 0 || key.indexOf('advanced_') === 0) return ['full_hidden_columns', 'full_hidden_fields', 'advanced_hidden_columns'];
+      return ['hidden_columns', 'hide_columns', 'hidden_fields'];
+    }
+
+    function shouldShowConfigField(field) {
+      const key = normalizeClientConfigKey(field.name);
+      if (hasTitleColumnField() && isLegacyTitleColumnField(key)) return false;
+      if (state.configSelectedRowNumber) {
+        if (state.activeConfigKey === 'form') return isEditableFormSettingField(field);
+        if (state.activeConfigKey === 'view') return isEditableViewSettingField(field);
+        if (state.activeConfigKey === 'component') return isEditableComponentSettingField(field);
+      }
+      if (state.activeConfigKey !== 'form') return true;
+      if (field.group === 'design') return false;
+      return ![
+        'view_id',
+        'view',
+        'form_type',
+        'type',
+        'mode',
+        'display_type',
+        'columns',
+        'layout_columns',
+        'column_count',
+        'label_position',
+        'label_layout',
+        'show_empty_fields',
+        'status',
+        'nested_table',
+        'nested_tables',
+        'related_table',
+        'related_tables',
+        'quick_columns',
+        'quick_column_count',
+        'quick_column_order',
+        'quick_field_order',
+        'quick_hidden_columns',
+        'quick_hidden_fields',
+        'full_columns',
+        'full_column_count',
+        'advanced_columns',
+        'full_column_order',
+        'full_field_order',
+        'advanced_column_order',
+        'full_hidden_columns',
+        'full_hidden_fields',
+        'advanced_hidden_columns',
+      ].includes(key);
+    }
+
+    function hasTitleColumnField() {
+      return !!findConfigDataHeaderByHints(['title_column', 'record_title_column', 'record_name_column']);
+    }
+
+    function isLegacyTitleColumnField(key) {
+      return ['display_name_column', 'display_column', 'main_display_name', 'main_display_field', 'display_name', 'display_field', 'title_field', 'record_title_field', 'primary_field', 'name_field'].includes(key);
+    }
+
+    function isEditableFormSettingField(field) {
+      const key = normalizeClientConfigKey(field.name);
+      return [
+        'mode',
+        'form_mode',
+        'edit_mode',
+        'form_type',
+        'form_layout_type',
+        'layout_type',
+        'flow_type',
+        'show_empty_fields',
+        'show_empty',
+        'title_column',
+        'record_title_column',
+        'record_name_column',
+        'display_name_column',
+        'display_column',
+        'main_display_name',
+        'main_display_field',
+        'display_name',
+        'display_field',
+        'title_field',
+        'record_title_field',
+        'primary_field',
+        'name_field',
+        'section_layout',
+        'form_sections',
+        'sections',
+        'filter_fields',
+        'filter_columns',
+        'smart_filter_fields',
+        'default_filters',
+        'predefined_filters',
+        'preset_filters',
+        'filter_config',
+        'status',
+      ].includes(key);
+    }
+
+    function isEditableViewSettingField(field) {
+      const key = normalizeClientConfigKey(field.name);
+      return [
+        'title_column',
+        'record_title_column',
+        'record_name_column',
+        'display_name_column',
+        'display_column',
+        'main_display_name',
+        'main_display_field',
+        'display_name',
+        'display_field',
+        'title_field',
+        'record_title_field',
+        'primary_field',
+        'name_field',
+        'default_group_by',
+        'default_groups',
+        'default_group_fields',
+        'group_by',
+        'group_fields',
+        'section_layout',
+        'form_sections',
+        'sections',
+        'filter_fields',
+        'filter_columns',
+        'smart_filter_fields',
+        'default_filters',
+        'predefined_filters',
+        'preset_filters',
+        'filter_config',
+        'default_sort',
+        'default_sort_field',
+        'sort_field',
+        'order_by',
+        'default_sort_direction',
+        'sort_direction',
+        'order_direction',
+      ].includes(key);
+    }
+
+    function isEditableComponentSettingField(field) {
+      const key = normalizeClientConfigKey(field.name);
+      return [
+        'enabled',
+        'active',
+        'visible',
+        'config_value',
+        'value',
+        'setting_value',
+      ].includes(key);
+    }
+
+    function getSchemaColumns(table) {
+      if (!table) return [];
+      const properties = Array.isArray(table.columnProperties) && table.columnProperties.length
+        ? table.columnProperties
+        : (table.columns || []).map((column, index) => ({ columnName: column, columnIndex: index }));
+      return properties
+        .sort((left, right) => Number(left.columnIndex || 0) - Number(right.columnIndex || 0))
+        .map((column) => column.columnName || '')
+        .filter(Boolean);
+    }
+
+    function getNestedTableOptions(value, record) {
+      const tables = state.bootstrap && state.bootstrap.tables ? state.bootstrap.tables : {};
+      const options = Object.keys(tables).map((key) => tables[key])
+        .filter((table) => table && table.name && table.type !== 'config' && table.type !== 'system')
+        .map((table) => table.name);
+      return uniqueConfigOptions([...(parseConfigMultiValue(value) || []), ...getRelatedNestedTableNamesForFormRecord(record || {}), ...options]);
+    }
+    function findConfigDataHeaderByHints(hints) {
+      const normalized = (hints || []).map(normalizeClientConfigKey);
+      return ((state.configData && state.configData.headers) || []).find((header) => (
+        normalized.includes(normalizeClientConfigKey(header))
+      )) || '';
+    }
+
+    function getComponentTypeOptions(record, value) {
+      const viewType = getViewTypeForComponentRecord(record);
+      const byViewType = {
+        table: ['search', 'sort', 'status_filter', 'grouping', 'open_sheet', 'new_row', 'import', 'view_switcher'],
+        detail: ['sort', 'master_list', 'grouping', 'edit', 'advanced_edit'],
+        card: ['sort', 'card_image', 'card_fields', 'edit'],
+        form: ['save', 'delete', 'cancel', 'import'],
+      };
+      const fallback = Object.keys(byViewType).reduce((acc, key) => acc.concat(byViewType[key]), []);
+      return uniqueConfigOptions([value].concat(byViewType[viewType] || fallback));
+    }
+
+    function getLandingPageOptions(value) {
+      const selected = String(value || '').trim();
+      const navOptions = getNavigationLandingOptions(state.bootstrap ? state.bootstrap.navigation || [] : []);
+      const pageOptions = getPageConfigLandingOptions();
+      return uniqueConfigOptions((selected ? [selected] : []).concat(navOptions, pageOptions));
+    }
+
+    function getNavigationLandingOptions(items) {
+      return (items || []).flatMap((item) => {
+        const current = item && (item.tableKey || item.overviewKey || item.linkUrl)
+          ? [item.pageId || item.id || item.tableKey || item.overviewKey].filter(Boolean)
+          : [];
+        return current.concat(getNavigationLandingOptions(item.children || []));
+      });
+    }
+
+    function getPageConfigLandingOptions() {
+      const data = state.configDataCache['config:page'];
+      return ((data && data.rows) || [])
+        .map((row) => getRecordValueByHints(row.record || {}, ['page_id', 'id', 'key', 'config_key']))
+        .filter(Boolean);
+    }
+
+    function getViewTypeForComponentRecord(record) {
+      const viewId = getRecordValueByHints(record, ['view_id', 'view']);
+      const direct = normalizeClientConfigKey(getRecordValueByHints(record, ['view_type', 'type']));
+      if (direct) return direct;
+      const view = getCachedViewRecord(viewId);
+      return normalizeClientConfigKey(view ? getRecordValueByHints(view, ['view_type', 'type']) : '');
+    }
+
+    function isDefaultGroupByConfigKey(key) {
+      return ['default_group_by', 'default_groups', 'default_group_fields', 'group_by', 'group_fields'].includes(key);
+    }
+
+    function getDefaultGroupByOptions(record, value) {
+      const table = getConfigTargetTable(record);
+      const options = getGroupableSchemaColumns(table);
+      return uniqueConfigOptions([...(parseConfigMultiValue(value) || []), ...options]);
+    }
+
+    function getGroupableSchemaColumns(table) {
+      if (!table) return [];
+      const properties = Array.isArray(table.columnProperties) && table.columnProperties.length
+        ? table.columnProperties
+        : (table.columns || []).map((column, index) => ({ columnName: column, columnIndex: index }));
+      return properties
+        .filter((column) => isGroupableSchemaColumn(column))
+        .sort((left, right) => Number(left.columnIndex || 0) - Number(right.columnIndex || 0))
+        .map((column) => column.columnName || '')
+        .filter(Boolean);
+    }
+
+    function isGroupableSchemaColumn(column) {
+      const name = String((column && column.columnName) || '').trim();
+      if (!name) return false;
+      const key = normalizeClientConfigKey(name);
+      if (!key || key === 'id' || key.endsWith('_id')) return false;
+      if (/^(row|record|uuid|guid|url|link|photo|image|img|file|attachment|note|notes|detail|description|summary|comment|address|email|phone|tel|mobile|website|content|body|text|long_text)$/i.test(key)) return false;
+      if (/(url|link|photo|image|file|attachment|note|detail|description|summary|comment|email|phone)$/i.test(key)) return false;
+      const type = normalizeClientConfigKey((column && column.columnType) || '');
+      if (['IMAGE', 'URL', 'FILE', 'RICH_TEXT', 'LONG_TEXT'].map(normalizeClientConfigKey).includes(type)) return false;
+      if (['CHECKBOX'].map(normalizeClientConfigKey).includes(type)) return true;
+      if (column && column.dataValidationRule) return true;
+      if (['TEXT', 'DROPDOWN', 'SMART_CHIP'].map(normalizeClientConfigKey).includes(type)) return true;
+      return !/(amount|price|cost|value|qty|quantity|number|score|percent|rate|total|subtotal|formula)$/i.test(key);
+    }
+
+    function getConfigTargetTable(record) {
+      const directName = getRecordValueByHints(record, ['table_name', 'source_table', 'table']);
+      const siblingName = getSiblingConfigValue(record, ['table_name', 'source_table', 'table']);
+      const viewId = getRecordValueByHints(record, ['view_id', 'view']);
+      const view = getCachedViewRecord(viewId);
+      const pageId = getRecordValueByHints(record, ['page_id', 'page', 'config_group', 'group'])
+        || (view ? getRecordValueByHints(view, ['page_id', 'page']) : '')
+        || inferPageIdFromViewRecord(record)
+        || inferPageIdFromFormRecord(record);
+      return findBootstrapTableByName(directName)
+        || findBootstrapTableByName(siblingName)
+        || findBootstrapTableByName(getPageTableNameFromCachedConfig(pageId))
+        || findBootstrapTableByName(pageId)
+        || null;
+    }
+
+    function inferPageIdFromViewRecord(record) {
+      const viewId = getRecordValueByHints(record, ['view_id', 'id', 'key']);
+      const type = normalizeClientConfigKey(getRecordValueByHints(record, ['view_type', 'type', 'item']));
+      if (!viewId || !type) return '';
+      const suffix = `.${type}`;
+      return viewId.endsWith(suffix) ? viewId.slice(0, -suffix.length) : '';
+    }
+
+    function inferPageIdFromFormRecord(record) {
+      const formId = getRecordValueByHints(record, ['form_id', 'id', 'key']);
+      const mode = normalizeClientConfigKey(getRecordValueByHints(record, ['mode', 'form_mode', 'edit_mode', 'type', 'item']));
+      if (!formId || !mode) return '';
+      const suffix = `.${mode}`;
+      return formId.endsWith(suffix) ? formId.slice(0, -suffix.length) : '';
+    }
+
+    function getSiblingConfigValue(record, nameHints) {
+      const rows = state.configData && state.configData.rows ? state.configData.rows : [];
+      const group = getRecordValueByHints(record, ['config_group', 'group', 'category', 'page_id', 'view_id']);
+      const normalizedGroup = normalizeClientConfigKey(group);
+      const hints = (nameHints || []).map(normalizeClientConfigKey);
+      const match = rows.find((row) => {
+        const rowGroup = normalizeClientConfigKey(getRecordValueByHints(row.record, ['config_group', 'group', 'category', 'page_id', 'view_id']));
+        if (normalizedGroup && rowGroup !== normalizedGroup) return false;
+        const rowName = normalizeClientConfigKey(getRecordValueByHints(row.record, ['config_name', 'name', 'item', 'key']));
+        return hints.includes(rowName);
+      });
+      return match ? getRecordValueByHints(match.record, ['config_value', 'value', 'setting_value', 'table_name', 'source_table']) : '';
+    }
+
+    function getPageTableNameFromCachedConfig(pageId) {
+      if (!pageId) return '';
+      const data = state.activeConfigKey === 'page' ? state.configData : state.configDataCache['config:page'];
+      const rows = data && data.rows ? data.rows : [];
+      const normalizedPageId = normalizeClientConfigKey(pageId);
+      const objectRow = rows.find((row) => normalizeClientConfigKey(getRecordValueByHints(row.record, ['page_id', 'id', 'key'])) === normalizedPageId);
+      if (objectRow) return getRecordValueByHints(objectRow.record, ['table_name', 'source_table', 'table']);
+      const match = rows.find((row) => {
+        const group = normalizeClientConfigKey(getRecordValueByHints(row.record, ['config_group', 'page_id', 'group']));
+        const name = normalizeClientConfigKey(getRecordValueByHints(row.record, ['config_name', 'name', 'item', 'key']));
+        return group === normalizedPageId && ['table_name', 'source_table', 'table'].includes(name);
+      });
+      return match ? getRecordValueByHints(match.record, ['config_value', 'value', 'setting_value', 'table_name', 'source_table']) : '';
+    }
+
+    function findBootstrapTableByName(name) {
+      if (!name || !state.bootstrap || !state.bootstrap.tables) return null;
+      const normalized = normalizeClientConfigKey(name);
+      const tables = state.bootstrap.tables || {};
+      return Object.keys(tables).reduce((found, key) => {
+        if (found) return found;
+        const table = tables[key] || {};
+        const candidates = [key, table.name, table.apiTableName, table.sheetName]
+          .filter(Boolean)
+          .map(normalizeClientConfigKey);
+        return candidates.includes(normalized) ? Object.assign({ key }, table) : null;
+      }, null);
+    }
+
+    function parseConfigMultiValue(value) {
+      return String(value || '')
+        .split(/[,;\n|]+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+
+    function uniqueConfigOptions(options) {
+      const seen = {};
+      return (options || []).reduce((acc, option) => {
+        const text = String(option || '').trim();
+        const key = normalizeClientConfigKey(text);
+        if (!text || seen[key]) return acc;
+        seen[key] = true;
+        acc.push(text);
+        return acc;
+      }, []);
+    }
+
+    function isBooleanConfigKey(key) {
+      return /^(enable|show|allow|is|has)_/.test(key) ||
+        ['enabled', 'hidden', 'disabled', 'groupable', 'default_group', 'is_default', 'active', 'visible'].includes(key);
+    }
+
+    function isBooleanText(value) {
+      return ['true', 'false', 'yes', 'no', 'on', 'off', 'enabled', 'disabled', 'required', 'optional', 'mandatory'].includes(normalizeClientNavText(value));
+    }
+
+    function configBoolValue(value, defaultValue) {
+      const text = normalizeClientNavText(value);
+      if (['false', 'no', 'off', 'disabled', 'inactive', '0', 'optional', 'not_required', 'notrequired', 'khong_bat_buoc'].includes(text)) return false;
+      if (['true', 'yes', 'on', 'enabled', 'active', '1', 'required', 'mandatory', 'must', 'bat_buoc'].includes(text)) return true;
+      return defaultValue;
+    }
+
+    function normalizeConfigColor(value) {
+      const text = String(value || '').trim();
+      return /^#[0-9a-f]{6}$/i.test(text) ? text : '#c89a5b';
+    }

@@ -1,0 +1,1875 @@
+    /*
+      ClientState owns shared browser state, element refs, bootstrap loading,
+      cache/prefetch, and mobile viewport detection.
+      Do not put rendering or event-handler feature code here.
+    */
+    const ICONS = {
+      menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
+      collapse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3.5" y="4.5" width="17" height="15" rx="3.5"/><path d="M9.5 4.5v15"/></svg>',
+      expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3.5" y="4.5" width="17" height="15" rx="3.5"/><path d="M9.5 4.5v15"/></svg>',
+      plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14M5 12h14"/></svg>',
+      download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 4v10"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>',
+      upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 20V10"/><path d="m7 14 5-5 5 5"/><path d="M5 4h14"/></svg>',
+      print: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 8V4h10v4"/><path d="M7 18h10v2H7z"/><rect x="4" y="8" width="16" height="8" rx="2"/><path d="M8 12h0"/></svg>',
+      sparkles: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 3 1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8L12 3Z"/><path d="m19 14 .9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14Z"/><path d="m6 15 .7 1.6L8.3 17l-1.6.7L6 19.3l-.7-1.6L3.7 17l1.6-.7L6 15Z"/></svg>',
+      copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"/></svg>',
+      edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4 11.5-11.5Z"/></svg>',
+      trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 14h10l1-14"/><path d="M9 7V4h6v3"/></svg>',
+      sheet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="3.5" width="14" height="17" rx="2"/><path d="M8 8h8M8 12h8M8 16h8M11 8v8"/></svg>',
+      table: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16M9 5v14"/></svg>',
+      masterDetail: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M10 5v14"/><path d="M7 9h0M7 12h0M7 15h0M13 9h4M13 12h3M13 15h4"/></svg>',
+      advancedEdit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 4H5a1 1 0 0 0-1 1v3"/><path d="M16 4h3a1 1 0 0 1 1 1v3"/><path d="M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M16 20h3a1 1 0 0 0 1-1v-3"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>',
+      dot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="4"/></svg>',
+      layers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 3 8 4-8 4-8-4 8-4Z"/><path d="m4 12 8 4 8-4"/><path d="m4 17 8 4 8-4"/></svg>',
+      shellApp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><path d="M14 16h6M17 13v6"/></svg>',
+      gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.03.03a2 2 0 0 1-2.83 2.83l-.03-.03a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.05a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.88.34l-.03.03a2 2 0 1 1-2.83-2.83l.03-.03A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 0 1 0-4h.05A1.7 1.7 0 0 0 4.6 8.94a1.7 1.7 0 0 0-.34-1.88l-.03-.03a2 2 0 0 1 2.83-2.83l.03.03a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 10 3.05V3a2 2 0 0 1 4 0v.05a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.03-.03a2 2 0 0 1 2.83 2.83l-.03.03a1.7 1.7 0 0 0-.34 1.88A1.7 1.7 0 0 0 20.95 10H21a2 2 0 0 1 0 4h-.05A1.7 1.7 0 0 0 19.4 15Z"/></svg>',
+      language: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg>',
+      hardRefresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v6h-6"/></svg>',
+      lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>',
+      settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h16M7 7v10M4 17h16M17 7v10"/></svg>',
+      sliders: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 6h14M5 12h14M5 18h14"/><path d="M9 4v4M15 10v4M11 16v4"/></svg>',
+      filter: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 6h16"/><path d="M7 12h10"/><path d="M10 18h4"/></svg>',
+      sort: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h10"/><path d="M4 12h7"/><path d="M4 17h4"/><path d="M17 5v14"/><path d="m13 15 4 4 4-4"/></svg>',
+      search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><path d="m16.5 16.5 4 4"/></svg>',
+      fullscreen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M21 16v3a2 2 0 0 1-2 2h-3"/></svg>',
+      userApp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg>',
+      external: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 5h5v5"/><path d="m10 14 9-9"/><path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/></svg>',
+      chevronLeft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m15 18-6-6 6-6"/></svg>',
+      chevronRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m9 18 6-6-6-6"/></svg>',
+      chevronDown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m6 9 6 6 6-6"/></svg>',
+    };
+    // v96 performs a one-time rollover for stable-snapshot table caches.
+    // Later F5 loads keep using tableFull until the manifest reports a change.
+    const CLIENT_CACHE_VERSION = 'v96';
+    const CLIENT_TABLE_CACHE_FORMAT_VERSION = 2;
+    const CLIENT_STATIC_BUNDLE_VERSION = 'config-ui-v6';
+    const CLIENT_INITIAL_TABLE_BATCH_SIZE = 102;
+    const CLIENT_BACKGROUND_TABLE_BATCH_SIZE = 1000;
+    const CLIENT_MANIFEST_SYNC_ENABLED = true;
+    const CLIENT_MANIFEST_SYNC_DELAY_MS = {
+      cachedBootstrap: 600,
+      coldBootstrap: 5000,
+    };
+    const CLIENT_CACHE_TTL = {
+      uiConfig: 3 * 24 * 60 * 60 * 1000,
+      meta: 3 * 24 * 60 * 60 * 1000,
+      staticBundle: 3 * 24 * 60 * 60 * 1000,
+      manifest: 30 * 24 * 60 * 60 * 1000,
+      tableInitial: 60 * 1000,
+      tableFull: 3 * 24 * 60 * 60 * 1000,
+      preference: 3 * 24 * 60 * 60 * 1000,
+    };
+    const CLIENT_RUNTIME_CACHE_BUCKET = Object.freeze({
+      config: 'config',
+      schema: 'schema:table',
+      table: 'table',
+      tableInitial: 'tableInitial',
+    });
+
+    function getRuntimeCacheKey(bucket, key) {
+      return `${bucket}:${key || ''}`;
+    }
+
+    function getConfigRuntimeCacheKey(configKey) {
+      return getRuntimeCacheKey(CLIENT_RUNTIME_CACHE_BUCKET.config, configKey);
+    }
+
+    function getSchemaRuntimeCacheKey(tableKey) {
+      return getRuntimeCacheKey(CLIENT_RUNTIME_CACHE_BUCKET.schema, tableKey);
+    }
+
+    function getTableRuntimeCacheKey(tableKey) {
+      return getRuntimeCacheKey(CLIENT_RUNTIME_CACHE_BUCKET.table, tableKey);
+    }
+
+    function getInitialTableRuntimeCacheKey(tableKey) {
+      return getRuntimeCacheKey(CLIENT_RUNTIME_CACHE_BUCKET.tableInitial, tableKey);
+    }
+
+    function getClientCacheNamespacePrefix() {
+      const path = window.location ? window.location.pathname || 'process-app' : 'process-app';
+      return `processApp:${path}:`;
+    }
+
+    function getClientCachePrefix() {
+      return `${getClientCacheNamespacePrefix()}${CLIENT_CACHE_VERSION}:`;
+    }
+
+    function getClientStorage() {
+      try {
+        return window.localStorage || null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function getClientCacheKey(bucket, key) {
+      const bundleVersion = bucket === 'staticBundle' ? `${CLIENT_STATIC_BUNDLE_VERSION}:` : '';
+      return `${getClientCachePrefix()}${bucket}:${bundleVersion}${key || 'default'}`;
+    }
+
+    function readClientCache(bucket, key, ttl) {
+      const storage = getClientStorage();
+      if (!storage) return null;
+      const cacheKey = getClientCacheKey(bucket, key);
+      const cacheValue = readClientCacheByKey(storage, cacheKey, ttl);
+      if (cacheValue.found) return cacheValue.value;
+      const legacyValue = readLegacyClientCache(bucket, key, ttl);
+      if (legacyValue.found) {
+        writeClientCache(bucket, key, legacyValue.value, ttl || legacyValue.ttl);
+        return legacyValue.value;
+      }
+      return null;
+    }
+
+    function readClientCacheByKey(storage, cacheKey, ttl) {
+      try {
+        const raw = storage.getItem(cacheKey);
+        if (!raw) return { found: false };
+        const payload = JSON.parse(raw);
+        const savedAt = Number(payload.savedAt || 0);
+        const maxAge = Number(ttl || payload.ttl || 0);
+        if (!savedAt || (maxAge > 0 && Date.now() - savedAt > maxAge)) {
+          storage.removeItem(cacheKey);
+          return { found: false };
+        }
+        return { found: true, value: payload.value, savedAt, ttl: Number(payload.ttl || 0) };
+      } catch (error) {
+        try { storage.removeItem(cacheKey); } catch (removeError) {}
+        return { found: false };
+      }
+    }
+
+    function readLegacyClientCache(bucket, key, ttl) {
+      const storage = getClientStorage();
+      if (!storage) return { found: false };
+      // Table payloads created before stable snapshots can be incomplete and
+      // must never be migrated into the current cache namespace.
+      if (bucket === 'tableFull' || bucket === 'tableInitial') return { found: false };
+      const path = window.location ? window.location.pathname || 'process-app' : 'process-app';
+      const rootPrefix = `processApp:${path}:`;
+      const currentPrefix = getClientCachePrefix();
+      const suffix = `${bucket}:${key || 'default'}`;
+      let best = null;
+      try {
+        for (let index = storage.length - 1; index >= 0; index -= 1) {
+          const storageKey = storage.key(index);
+          if (!storageKey || storageKey.indexOf(rootPrefix) !== 0 || storageKey.indexOf(currentPrefix) === 0) continue;
+          if (storageKey.slice(-suffix.length) !== suffix) continue;
+          const candidate = readClientCacheByKey(storage, storageKey, ttl);
+          if (!candidate.found) continue;
+          if (!best || Number(candidate.savedAt || 0) > Number(best.savedAt || 0)) best = candidate;
+        }
+      } catch (error) {}
+      return best || { found: false };
+    }
+
+    function writeClientCache(bucket, key, value, ttl) {
+      if (window.__processAppHardRefreshing) return false;
+      const storage = getClientStorage();
+      if (!storage || value == null) return false;
+      const cacheKey = getClientCacheKey(bucket, key);
+      const payload = JSON.stringify({ savedAt: Date.now(), ttl: Number(ttl || 0), value });
+      try {
+        storage.setItem(cacheKey, payload);
+        return true;
+      } catch (error) {
+        pruneClientCacheBucket('tableFull');
+        pruneClientCacheBucket('tableInitial');
+        try {
+          storage.setItem(cacheKey, payload);
+          return true;
+        } catch (retryError) {
+          return false;
+        }
+      }
+    }
+
+    function removeClientCache(bucket, key) {
+      const storage = getClientStorage();
+      if (!storage) return;
+      try {
+        storage.removeItem(getClientCacheKey(bucket, key));
+      } catch (error) {}
+    }
+
+    function pruneClientCacheBucket(bucket) {
+      const storage = getClientStorage();
+      if (!storage) return;
+      const prefix = `${getClientCachePrefix()}${bucket}:`;
+      try {
+        for (let index = storage.length - 1; index >= 0; index -= 1) {
+          const key = storage.key(index);
+          if (key && key.indexOf(prefix) === 0) storage.removeItem(key);
+        }
+      } catch (error) {}
+    }
+
+    function cleanupClientStorageCache() {
+      const storage = getClientStorage();
+      if (!storage) return 0;
+      const namespacePrefix = getClientCacheNamespacePrefix();
+      const currentPrefix = getClientCachePrefix();
+      let removed = 0;
+      try {
+        for (let index = storage.length - 1; index >= 0; index -= 1) {
+          const key = storage.key(index);
+          if (!key || key.indexOf(namespacePrefix) !== 0) continue;
+          const isPreference = key.indexOf(':preference:') >= 0;
+          if (key.indexOf(currentPrefix) !== 0 && !isPreference) {
+            storage.removeItem(key);
+            removed += 1;
+            continue;
+          }
+          let payload;
+          try {
+            payload = JSON.parse(storage.getItem(key) || '');
+          } catch (error) {
+            payload = null;
+          }
+          const savedAt = Number(payload && payload.savedAt || 0);
+          const ttl = Number(payload && payload.ttl || 0);
+          if (!payload || !savedAt || (ttl > 0 && Date.now() - savedAt > ttl)) {
+            storage.removeItem(key);
+            removed += 1;
+          }
+        }
+      } catch (error) {}
+      return removed;
+    }
+
+    function invalidatePersistentConfigCaches() {
+      ['bootstrap', 'uiConfig', 'meta'].forEach((bucket) => pruneClientCacheBucket(bucket));
+    }
+
+    function clearClientStorageNamespace(options = {}) {
+      const storage = getClientStorage();
+      if (!storage) return 0;
+      const namespacePrefix = options.allProcessApp ? 'processApp:' : getClientCacheNamespacePrefix();
+      const preservePreferences = options.preservePreferences !== false;
+      let removed = 0;
+      try {
+        for (let index = storage.length - 1; index >= 0; index -= 1) {
+          const key = storage.key(index);
+          const isPreference = key && key.indexOf(':preference:') >= 0;
+          if (key && key.indexOf(namespacePrefix) === 0 && (!preservePreferences || !isPreference)) {
+            storage.removeItem(key);
+            removed += 1;
+          }
+        }
+      } catch (error) {}
+      return removed;
+    }
+
+    function resetConfigBundleRuntime() {
+      try {
+        window.__configClientBundleLoaded = false;
+        window.__configClientBundlePromise = null;
+        window.__configStyleBundleLoaded = false;
+        window.__configStyleBundlePromise = null;
+        window.__configTableSchemasLoaded = false;
+        window.__configTableSchemasPromise = null;
+        document.querySelectorAll('style[data-config-style-bundle="true"]').forEach((node) => node.remove());
+      } catch (error) {}
+    }
+
+    function getHardRefreshReloadUrl() {
+      const canonicalUrl = String(window.APP_WEB_APP_URL || '').trim();
+      const shellUrl = canonicalUrl
+        || (document.referrer && /script\.google\.com\/macros\/s\//i.test(document.referrer)
+        ? document.referrer
+        : window.location.href);
+      try {
+        const url = new URL(shellUrl);
+        url.searchParams.delete('hardRefresh');
+        return url.toString();
+      } catch (error) {
+        return shellUrl;
+      }
+    }
+
+    function navigateTopWithAnchor(targetUrl) {
+      const anchor = document.createElement('a');
+      anchor.href = targetUrl;
+      anchor.target = '_top';
+      anchor.rel = 'noopener';
+      anchor.style.display = 'none';
+      document.body.appendChild(anchor);
+      anchor.click();
+    }
+
+    function reloadAppShellAfterHardRefresh() {
+      const targetUrl = getHardRefreshReloadUrl();
+      try {
+        if (window.top && window.top !== window.self) {
+          window.top.location.href = targetUrl;
+          navigateTopWithAnchor(targetUrl);
+          return;
+        }
+      } catch (error) {}
+      try {
+        navigateTopWithAnchor(targetUrl);
+        return;
+      } catch (error) {}
+      try {
+        window.location.replace(targetUrl);
+      } catch (error) {
+        window.location.reload();
+      }
+    }
+
+    async function fetchFreshAppBootstrapWithRuntimeConfig(forceRefresh = true) {
+      const force = !!forceRefresh;
+      const results = await Promise.all([
+        gasCall('getAppBootstrap', force),
+        gasCall('getUserAppRuntimeConfig', force),
+      ]);
+      const bootstrap = results[0] || {};
+      const runtimeConfig = results[1] || bootstrap.uiConfig || {};
+      bootstrap.uiConfig = runtimeConfig;
+      writeClientCache('bootstrap', 'app', bootstrap, CLIENT_CACHE_TTL.uiConfig);
+      writeClientCache('uiConfig', 'runtime', runtimeConfig, CLIENT_CACHE_TTL.uiConfig);
+      return bootstrap;
+    }
+
+
+    async function hardRefreshAppSettings() {
+      if (window.__processAppHardRefreshing) return;
+      window.__processAppHardRefreshing = true;
+      state.tableBackgroundLoadToken = '';
+      state.tablePageRequestToken = `hard-refresh:${Date.now()}`;
+      if (state.manifestSyncTimer) {
+        window.clearTimeout(state.manifestSyncTimer);
+        state.manifestSyncTimer = null;
+      }
+      state.appMode = 'user';
+      syncAppModeShell();
+      if (el.pageTitle) el.pageTitle.textContent = getProcessName();
+      if (el.breadcrumb) el.breadcrumb.textContent = 'Refreshing app';
+      if (el.content) {
+        el.content.innerHTML = typeof renderHardRefreshPanel === 'function'
+          ? renderHardRefreshPanel()
+          : '<section class="panel route-loading-panel"><div class="route-loading-head"><div><strong>Refreshing app</strong><span>Loading the latest data and configuration</span></div><i aria-hidden="true"></i></div></section>';
+      }
+      clearClientStorageNamespace({ allProcessApp: true, preservePreferences: false });
+      resetConfigBundleRuntime();
+      showToast('Refreshing data and settings');
+      setLoading(true, 'Refreshing app');
+      try {
+        const result = await gasCall('hardRefreshAppSettings');
+        if (!result || result.ok !== true || result.clearedServerCache !== true) {
+          throw new Error(result && result.message ? result.message : 'Server cache could not be cleared.');
+        }
+        // Requests started before hard refresh may finish while the server cache
+        // is being cleared. Remove their writes once more before reloading so
+        // the next page starts without any client-side data or config cache.
+        clearClientStorageNamespace({ allProcessApp: true, preservePreferences: false });
+        reloadAppShellAfterHardRefresh();
+      } catch (error) {
+        window.__processAppHardRefreshing = false;
+        console.error('Hard refresh failed:', error);
+        setLoading(false);
+        showError(error);
+        showToast('Hard refresh failed. Data was not reloaded.');
+      }
+    }
+
+    function getStoredPreference(key, fallback) {
+      const value = readClientCache('preference', key, CLIENT_CACHE_TTL.preference);
+      return value == null ? fallback : value;
+    }
+
+    function setStoredPreference(key, value) {
+      writeClientCache('preference', key, value, CLIENT_CACHE_TTL.preference);
+    }
+
+    function getStoredLanguage() {
+      try {
+        const savedPreference = getStoredPreference('language', '');
+        const saved = savedPreference || (window.localStorage ? window.localStorage.getItem('processAppLanguage') : '');
+        return ['default', 'vi', 'en', 'zh'].includes(saved) ? saved : 'default';
+      } catch (error) {
+        return 'default';
+      }
+    }
+    const state = {
+      bootstrap: null,
+      uiConfig: null,
+      uiConfigHydrating: false,
+      uiConfigHydrationPromise: null,
+      uiConfigHydrated: false,
+      activeStep: null,
+      activeTableKey: 'sampleRequest',
+      activeOverviewKey: '',
+      activePageType: '',
+      activeLinkUrl: '',
+      tableData: null,
+      overviewData: null,
+      overviewFilters: {},
+      dataCache: {},
+      dataCacheMeta: {},
+      metaCache: {},
+      inFlight: {},
+      tableHydration: {},
+      formReadinessPromises: {},
+      activeHydrationToken: '',
+      tableDataVersion: 0,
+      filteredRowsCache: null,
+      filterOptionsCache: {},
+      manifestSyncPromise: null,
+      manifestSyncTimer: null,
+      acknowledgedTableVersions: {},
+      routeLoading: false,
+      shouldResetRouteScroll: false,
+      routeScrollResetUntil: 0,
+      routeScrollResetUserActivityAt: 0,
+      prefetchingAll: false,
+      prefetchTimer: null,
+      prefetchInstalled: false,
+      lastUserActivityAt: Date.now(),
+      collapsedNav: {},
+      sidebarCollapsed: !!getStoredPreference('sidebarCollapsed', false),
+      language: getStoredLanguage(),
+      languageMenuOpen: false,
+      query: '',
+      status: '',
+      tableFilters: {},
+      filterSearchQuery: '',
+      expandedFilterGroups: {},
+      filterMenuOpen: false,
+      filterDismissBound: false,
+      tableViewMode: 'table',
+      tablePage: 1,
+      tablePageSize: CLIENT_INITIAL_TABLE_BATCH_SIZE,
+      tableDataLoading: false,
+      tablePageRequestToken: '',
+      tableBackgroundLoadToken: '',
+      tableBackgroundRetries: {},
+      tableHydrationTicker: null,
+      detailRowNumber: null,
+      masterListScrollTop: 0,
+      shouldRestoreMasterListScroll: false,
+      tableGroupBy: [],
+      collapsedTableGroups: {},
+      defaultGroupCollapsePending: false,
+      defaultGroupCollapseSignature: '',
+      toastTimer: null,
+      editing: null,
+      editingTableData: null,
+      drawerStack: [],
+      drawerLoading: false,
+      saveQueue: [],
+      saveQueueRunning: false,
+      saveSequence: 0,
+      pendingDelete: null,
+      importDraft: null,
+      sort: { header: '', direction: 1 },
+      appMode: 'user',
+      userAppNeedsRefresh: false,
+      configBootstrap: null,
+      configData: null,
+      configDataCache: {},
+      configDataCacheMeta: {},
+      configBootstrapRefreshAt: 0,
+      configBootstrapInFlight: null,
+      configPrefetching: false,
+      configPrefetched: false,
+      configActiveType: '',
+      configActiveGroup: '',
+      configCollapsedTypes: {},
+      configCollapsedGroups: {},
+      activeConfigKey: '',
+      configSelectedRowNumber: null,
+      configQuery: '',
+      configPageFilter: '',
+      configPreviewFull: false,
+    };
+
+    const el = {
+      sidebar: document.getElementById('sidebar'),
+      content: document.getElementById('content'),
+      pageLoader: document.getElementById('pageLoader'),
+      pageTitle: document.getElementById('pageTitle'),
+      breadcrumb: document.getElementById('breadcrumb'),
+      mobileMenu: document.getElementById('mobileMenu'),
+      drawer: document.getElementById('drawer'),
+      drawerBackdrop: document.getElementById('drawerBackdrop'),
+      drawerTitle: document.getElementById('drawerTitle'),
+      drawerSubtitle: document.getElementById('drawerSubtitle'),
+      aiInsightBtn: document.getElementById('aiInsightBtn'),
+      formModeToggleBtn: document.getElementById('formModeToggleBtn'),
+      printFormBtn: document.getElementById('printFormBtn'),
+      importBtn: document.getElementById('importBtn'),
+      importPanel: document.getElementById('importPanel'),
+      importTemplateBtn: document.getElementById('importTemplateBtn'),
+      importFileInput: document.getElementById('importFileInput'),
+      importFileMeta: document.getElementById('importFileMeta'),
+      runImportBtn: document.getElementById('runImportBtn'),
+      recordForm: document.getElementById('recordForm'),
+      deleteBtn: document.getElementById('deleteBtn'),
+      closeDrawerBtn: document.getElementById('closeDrawerBtn'),
+      saveBtn: document.getElementById('saveBtn'),
+      toast: document.getElementById('toast'),
+    };
+
+    el.mobileMenu.innerHTML = ICONS.menu;
+    el.aiInsightBtn.innerHTML = `${ICONS.sparkles}<span>AI</span>`;
+    el.formModeToggleBtn.innerHTML = `${ICONS.advancedEdit}<span>Advanced</span>`;
+    el.printFormBtn.innerHTML = `${ICONS.print}<span>PNG</span>`;
+    el.importBtn.innerHTML = `${ICONS.upload}<span>Import</span>`;
+    el.importTemplateBtn.innerHTML = `${ICONS.download}<span>Template</span>`;
+
+    const MOBILE_LAYOUT_MAX_WIDTH = 760;
+    const MOBILE_TOUCH_SCREEN_MAX_WIDTH = 600;
+
+    function syncViewportMode() {
+      const visualWidth = window.visualViewport ? window.visualViewport.width : window.innerWidth;
+      const screenMin = window.screen ? Math.min(window.screen.width || 9999, window.screen.height || 9999) : 9999;
+      const touchMobile = (navigator.maxTouchPoints || 0) > 0 && screenMin <= MOBILE_TOUCH_SCREEN_MAX_WIDTH;
+      const narrowViewport = Math.min(visualWidth || 9999, window.innerWidth || 9999) <= MOBILE_LAYOUT_MAX_WIDTH;
+      const useMobileLayout = touchMobile || narrowViewport;
+      document.body.classList.toggle('mobile-viewport', useMobileLayout);
+      if (!useMobileLayout) el.sidebar.classList.remove('open');
+    }
+
+    syncViewportMode();
+    window.addEventListener('resize', syncViewportMode);
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', syncViewportMode);
+
+    function gasCall(name, ...args) {
+      if (window.google && google.script && google.script.run) {
+        return new Promise((resolve, reject) => {
+          google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[name](...args);
+        });
+      }
+      return Promise.reject(new Error('Google Apps Script runtime is required. Mock data is disabled.'));
+    }
+
+    function applyDefaultNavCollapse(navigation) {
+      state.collapsedNav = {};
+      (navigation || []).forEach((root) => {
+        const rootId = getNavNodeId(root);
+        const normalizedRoot = normalizeClientNavText(rootId || root.label);
+        const isOperationRoot = normalizedRoot === 'operation';
+        const isBusinessSetupRoot = normalizedRoot === 'business_setup' || normalizedRoot === 'businesssetup';
+
+        if (isBusinessSetupRoot) {
+          state.collapsedNav[rootId] = true;
+          collapseChildNavGroups(root);
+        }
+        if (isOperationRoot) {
+          state.collapsedNav[rootId] = false;
+          collapseChildNavGroups(root);
+        }
+      });
+    }
+
+    function collapseChildNavGroups(item) {
+      (item.children || []).forEach((child) => {
+        if (child.children && child.children.length) {
+          state.collapsedNav[getNavNodeId(child)] = true;
+          collapseChildNavGroups(child);
+        }
+      });
+    }
+
+    function normalizeClientNavText(value) {
+      return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    }
+
+    async function init() {
+      initScrollRestoration();
+      setLoading(true, 'Loading app');
+      try {
+        cleanupClientStorageCache();
+        installUserIdleTracking();
+        const cachedBootstrap = readClientCache('bootstrap', 'app', CLIENT_CACHE_TTL.uiConfig);
+        if (cachedBootstrap) {
+          await bootWithBootstrap(cachedBootstrap, { fromCache: true });
+          return;
+        }
+        const bootstrap = await gasCall('getAppBootstrap');
+        writeClientCache('bootstrap', 'app', bootstrap, CLIENT_CACHE_TTL.uiConfig);
+        await bootWithBootstrap(bootstrap, { fromCache: false });
+      } catch (error) {
+        showError(error);
+        renderClientAccessError(error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function bootWithBootstrap(bootstrap, options = {}) {
+      state.bootstrap = bootstrap;
+      state.uiConfig = state.bootstrap.uiConfig || {};
+      state.uiConfigHydrated = !state.uiConfig.deferredDataConfig;
+      state.uiConfigHydrating = false;
+      applyUserAppConfig();
+      syncDocumentTitle();
+      applyDefaultNavCollapse(state.bootstrap.navigation);
+      const lastActiveStepId = getStoredPreference('lastActiveStepId', '');
+      const lastActiveMatch = lastActiveStepId
+        ? findStepById(state.bootstrap.navigation, lastActiveStepId)
+        : null;
+      state.activeStep = lastActiveMatch && lastActiveMatch.step
+        ? lastActiveMatch.step
+        : findDefaultLandingStep(state.bootstrap.navigation);
+      expandNavToStep(state.bootstrap.navigation, state.activeStep);
+      renderSidebar();
+      setLoading(false);
+      if (!applyPersistentInitialItemData(state.activeStep) && !applyBootstrapInitialItemData(state.activeStep)) {
+        console.info('Table cache miss:', state.activeStep && state.activeStep.tableKey || 'non-table');
+        prepareRouteLoading(state.activeStep);
+        renderPage();
+        await loadItem(state.activeStep, { prepared: true });
+      }
+      scheduleDeferredUiConfigHydration();
+      schedulePrefetchNavigationData(options.fromCache ? 12000 : 9000);
+      scheduleAppCacheManifestSync(!!options.fromCache);
+    }
+
+    function scheduleAppCacheManifestSync(fromCachedBootstrap) {
+      if (!CLIENT_MANIFEST_SYNC_ENABLED || state.manifestSyncPromise || state.manifestSyncTimer) return;
+      const delay = fromCachedBootstrap
+        ? CLIENT_MANIFEST_SYNC_DELAY_MS.cachedBootstrap
+        : CLIENT_MANIFEST_SYNC_DELAY_MS.coldBootstrap;
+      state.manifestSyncTimer = window.setTimeout(() => {
+        state.manifestSyncTimer = null;
+        syncAppCacheManifest();
+      }, delay);
+    }
+
+    function syncAppCacheManifest() {
+      if (state.manifestSyncPromise) return state.manifestSyncPromise;
+      const previous = readClientCache('manifest', 'app', CLIENT_CACHE_TTL.manifest);
+      state.manifestSyncPromise = gasCall('getAppCacheManifest')
+        .then((manifest) => {
+          if (!manifest || !manifest.tables) return null;
+          Object.keys(state.acknowledgedTableVersions || {}).forEach((tableKey) => {
+            const acknowledged = Number(state.acknowledgedTableVersions[tableKey] || 0);
+            const reported = Number(manifest.tables[tableKey] || 0);
+            if (acknowledged > reported) manifest.tables[tableKey] = String(acknowledged);
+          });
+          if (!previous) {
+            // v95 starts with a clean table cache, so the first manifest is only
+            // a baseline. Do not fetch bootstrap/table data again on this F5.
+            writeClientCache('manifest', 'app', manifest, CLIENT_CACHE_TTL.manifest);
+            return manifest;
+          }
+
+          const configChanged = String(previous.configVersion || '0') !== String(manifest.configVersion || '0') ||
+            String(previous.bootstrapVersion || '0') !== String(manifest.bootstrapVersion || '0');
+          const previousTables = previous.tables || {};
+          const changedTables = Object.keys(manifest.tables).filter((tableKey) => (
+            String(previousTables[tableKey] || '0') !== String(manifest.tables[tableKey] || '0')
+          ));
+
+          if (changedTables.length) console.info('Table cache invalidated by manifest:', changedTables);
+          changedTables.forEach(invalidateChangedTableClientCache);
+          if (configChanged) refreshChangedConfigCaches();
+          const activeChanged = state.activeTableKey && changedTables.includes(state.activeTableKey);
+          if (activeChanged) refreshChangedActiveTable(state.activeTableKey);
+          writeClientCache('manifest', 'app', manifest, CLIENT_CACHE_TTL.manifest);
+          return manifest;
+        })
+        .catch((error) => {
+          console.warn('App cache manifest sync skipped:', error);
+          return null;
+        })
+        .finally(() => {
+          state.manifestSyncPromise = null;
+        });
+      return state.manifestSyncPromise;
+    }
+
+    function acknowledgeTableManifestVersion(tableKey, tableVersion) {
+      if (!tableKey || !tableVersion) return false;
+      state.acknowledgedTableVersions[tableKey] = String(tableVersion);
+      const manifest = readClientCache('manifest', 'app', CLIENT_CACHE_TTL.manifest);
+      if (!manifest || !manifest.tables) return false;
+      manifest.tables[tableKey] = String(tableVersion);
+      return writeClientCache('manifest', 'app', manifest, CLIENT_CACHE_TTL.manifest);
+    }
+
+    function invalidateChangedTableClientCache(tableKey) {
+      if (!tableKey) return;
+      delete state.formReadinessPromises[tableKey];
+      const fullCacheKey = getTableRuntimeCacheKey(tableKey);
+      const initialCacheKey = getInitialTableRuntimeCacheKey(tableKey);
+      const schemaCacheKey = getSchemaRuntimeCacheKey(tableKey);
+      delete state.dataCache[fullCacheKey];
+      delete state.dataCache[initialCacheKey];
+      delete state.dataCacheMeta[fullCacheKey];
+      delete state.dataCacheMeta[initialCacheKey];
+      delete state.metaCache[schemaCacheKey];
+      removeClientCache('tableFull', tableKey);
+      removeClientCache('tableInitial', tableKey);
+      removeClientCache('meta', schemaCacheKey);
+    }
+
+    function refreshChangedActiveTable(tableKey) {
+      const item = state.activeStep;
+      if (!item || item.tableKey !== tableKey) return Promise.resolve(null);
+      resetTablePage();
+      return loadActiveTablePage({ page: 1, resetQuery: true });
+    }
+
+    function refreshChangedConfigCaches() {
+      invalidatePersistentConfigCaches();
+      return fetchFreshAppBootstrapWithRuntimeConfig(true)
+        .then((bootstrap) => {
+          if (!bootstrap) return null;
+          state.bootstrap = bootstrap;
+          state.uiConfig = bootstrap.uiConfig || state.uiConfig || {};
+          state.uiConfigHydrated = true;
+          applyUserAppConfig();
+          syncDocumentTitle();
+          renderSidebar();
+          renderPage();
+          return bootstrap;
+        })
+        .catch((error) => {
+          console.warn('Changed app config refresh skipped:', error);
+          return null;
+        });
+    }
+
+    function applyBootstrapInitialItemData(item) {
+      const payload = state.bootstrap && state.bootstrap.initialItemData ? state.bootstrap.initialItemData : null;
+      if (!item || !payload || payload.error || payload.type !== 'table') return false;
+      if (!item.tableKey || payload.tableKey !== item.tableKey) return false;
+      const data = payload.data;
+      if (!data || !Array.isArray(data.rows)) return false;
+
+      markRouteScrollReset();
+      const initialCacheKey = getInitialTableRuntimeCacheKey(item.tableKey);
+      state.dataCache[initialCacheKey] = data;
+      state.dataCacheMeta[initialCacheKey] = Date.now();
+      setRouteLoading(false);
+      applyLoadedItem(item, data);
+      resetLoadedItemUiState(item);
+      renderPage();
+      resetRouteScrollAfterRender();
+      scheduleActiveFormReadiness(item);
+      scheduleFullTableHydration(item);
+      schedulePostRoutePrefetch();
+      return true;
+    }
+
+    function applyPersistentInitialItemData(item) {
+      if (!item || !item.tableKey) return false;
+      const startedAt = Date.now();
+      const persistent = readPersistentTableData(item.tableKey);
+      const data = persistent.data;
+      if (!data || !Array.isArray(data.rows)) return false;
+      console.info('Table cache hit:', {
+        tableKey: item.tableKey,
+        bucket: persistent.bucket,
+        rows: data.rows.length,
+      });
+      markRouteScrollReset();
+      const cacheKey = persistent.bucket === 'tableFull'
+        ? getTableRuntimeCacheKey(item.tableKey)
+        : getInitialTableRuntimeCacheKey(item.tableKey);
+      state.dataCache[cacheKey] = data;
+      state.dataCacheMeta[cacheKey] = Date.now();
+      setRouteLoading(false);
+      applyLoadedItem(item, data);
+      resetLoadedItemUiState(item);
+      applyServerPageState(data);
+      state.tableHydration[item.tableKey] = {
+        status: persistent.bucket === 'tableFull' ? 'ready' : 'loading',
+        source: 'localStorage',
+        startedAt,
+        loadedAt: persistent.bucket === 'tableFull' ? Date.now() : 0,
+        durationMs: persistent.bucket === 'tableFull' ? Date.now() - startedAt : 0,
+        rows: data.rows.length,
+        totalRows: Number(data.serverPage && (data.serverPage.totalRows || data.serverPage.totalEstimate) || data.rows.length),
+      };
+      renderPage();
+      resetRouteScrollAfterRender();
+      scheduleActiveFormReadiness(item);
+      if (persistent.bucket !== 'tableFull') scheduleFullTableHydration(item);
+      schedulePostRoutePrefetch();
+      return true;
+    }
+
+    function scheduleDeferredUiConfigHydration() {
+      if (state.uiConfigHydrated || state.uiConfigHydrating) return;
+      if (!state.uiConfig || !state.uiConfig.deferredDataConfig) {
+        state.uiConfigHydrated = true;
+        return;
+      }
+      const run = () => {
+        if ('requestIdleCallback' in window) window.requestIdleCallback(() => hydrateDeferredUiConfig(), { timeout: 3500 });
+        else hydrateDeferredUiConfig();
+      };
+      window.setTimeout(run, 6500);
+    }
+
+    async function hydrateDeferredUiConfig() {
+      if (state.uiConfigHydrated) return state.uiConfig;
+      if (state.uiConfigHydrationPromise) return state.uiConfigHydrationPromise;
+      const cachedConfig = readClientCache('uiConfig', 'runtime', CLIENT_CACHE_TTL.uiConfig);
+      if (cachedConfig) {
+        state.uiConfig = cachedConfig;
+        state.uiConfigHydrated = true;
+        state.uiConfigHydrating = false;
+        applyUserAppConfig();
+        syncDocumentTitle();
+        if (state.appMode === 'user') {
+          renderSidebar();
+          renderPage();
+        }
+        return state.uiConfig;
+      }
+      state.uiConfigHydrating = true;
+      state.uiConfigHydrationPromise = (async () => {
+        const config = await gasCall('getUserAppRuntimeConfig', false);
+        if (config) {
+          writeClientCache('uiConfig', 'runtime', config, CLIENT_CACHE_TTL.uiConfig);
+          state.uiConfig = config;
+          state.uiConfigHydrated = true;
+          applyUserAppConfig();
+          syncDocumentTitle();
+          if (state.appMode === 'user') {
+            renderSidebar();
+            renderPage();
+          }
+        }
+        return state.uiConfig;
+      })();
+      try {
+        return await state.uiConfigHydrationPromise;
+      } catch (error) {
+        console.error('Deferred UI config hydration failed:', {
+          message: error && error.message ? error.message : String(error || ''),
+          name: error && error.name ? error.name : 'Error',
+          stack: error && error.stack ? error.stack : '',
+          activeTableKey: state.activeTableKey || '',
+          appMode: state.appMode || '',
+          hasDeferredConfig: !!(state.uiConfig && state.uiConfig.deferredDataConfig),
+          hasCachedRuntimeConfig: !!readClientCache('uiConfig', 'runtime', CLIENT_CACHE_TTL.uiConfig),
+        });
+        return state.uiConfig;
+      } finally {
+        state.uiConfigHydrating = false;
+        state.uiConfigHydrationPromise = null;
+      }
+    }
+
+    function refreshUiConfigInBackground() {
+      const inFlightKey = 'uiConfig:runtime:refresh';
+      if (state.inFlight[inFlightKey]) return;
+      state.inFlight[inFlightKey] = gasCall('getUserAppRuntimeConfig', false)
+        .then((config) => {
+          if (!config) return;
+          writeClientCache('uiConfig', 'runtime', config, CLIENT_CACHE_TTL.uiConfig);
+          state.uiConfig = config;
+          state.uiConfigHydrated = true;
+          applyUserAppConfig();
+          syncDocumentTitle();
+          if (state.appMode === 'user') {
+            renderSidebar();
+            renderPage();
+          }
+        })
+        .catch((error) => console.warn('UI config refresh skipped:', error))
+        .finally(() => {
+          delete state.inFlight[inFlightKey];
+        });
+    }
+
+    async function ensureUiConfigHydratedForForms() {
+      const forms = state.uiConfig && state.uiConfig.forms ? state.uiConfig.forms : {};
+      if (!forms.deferred && state.uiConfigHydrated) return true;
+      setLoading(true, 'Loading form config');
+      try {
+        await hydrateDeferredUiConfig();
+      } finally {
+        setLoading(false);
+      }
+      return true;
+    }
+
+    async function loadItem(item, options = {}) {
+      if (!item) {
+        state.tableData = null;
+        state.overviewData = null;
+        renderPage();
+        resetRouteScrollAfterRender();
+        return;
+      }
+      markRouteScrollReset();
+      const cacheKey = getItemCacheKey(item);
+      let cached = cacheKey ? state.dataCache[cacheKey] : null;
+      if (!cached && item.tableKey) {
+        const persistent = readPersistentTableData(item.tableKey);
+        cached = persistent.data;
+        if (cached && cacheKey) {
+          state.dataCache[cacheKey] = cached;
+          state.dataCacheMeta[cacheKey] = Date.now();
+          const cacheReady = persistent.bucket === 'tableFull';
+          state.tableHydration[item.tableKey] = {
+            status: cacheReady ? 'ready' : 'loading',
+            source: 'localStorage',
+            startedAt: Date.now(),
+            loadedAt: cacheReady ? Date.now() : 0,
+            durationMs: 0,
+            rows: cached.rows.length,
+            totalRows: Number(cached.serverPage && (cached.serverPage.totalRows || cached.serverPage.totalEstimate) || cached.rows.length),
+          };
+          console.info('Table cache hit:', {
+            tableKey: item.tableKey,
+            bucket: persistent.bucket,
+            rows: cached.rows.length,
+          });
+        }
+      }
+      if (cached) {
+        setRouteLoading(false);
+        applyLoadedItem(item, cached);
+        resetLoadedItemUiState(item);
+        if (item.tableKey) applyServerPageState(cached);
+        renderPage();
+        resetRouteScrollAfterRender();
+        if (item.tableKey) scheduleActiveFormReadiness(item);
+        if (item.tableKey) scheduleFullTableHydration(item);
+        return;
+      }
+
+      if (!options.prepared) {
+        prepareRouteLoading(item);
+        renderPage();
+      }
+      try {
+        if (item.tableKey) {
+          state.tableHydration[item.tableKey] = {
+            status: 'loading',
+            startedAt: Date.now(),
+            rows: 0,
+            totalRows: 0,
+          };
+          const initial = await fetchServerTablePage(item, {
+            page: 1,
+            pageSize: CLIENT_INITIAL_TABLE_BATCH_SIZE,
+            resetQuery: true,
+          });
+          writePersistentInitialTableData(item.tableKey, initial);
+          setRouteLoading(false);
+          applyLoadedItem(item, initial);
+          resetLoadedItemUiState(item);
+          applyServerPageState(initial);
+          renderPage();
+          resetRouteScrollAfterRender();
+          scheduleActiveFormReadiness(item);
+          scheduleFullTableHydration(item);
+          schedulePostRoutePrefetch();
+          return;
+        }
+
+        const loaded = await fetchItemData(item, options.force);
+        setRouteLoading(false);
+        applyLoadedItem(item, loaded);
+        resetLoadedItemUiState(item);
+        renderPage();
+        resetRouteScrollAfterRender();
+        schedulePostRoutePrefetch();
+      } catch (error) {
+        showError(error);
+      } finally {
+        setRouteLoading(false);
+      }
+    }
+
+    function schedulePostRoutePrefetch() {
+      const delay = state.uiConfig && state.uiConfig.deferredDataConfig && !state.uiConfigHydrated ? 9000 : 0;
+      schedulePrefetchNavigationData(delay);
+    }
+
+    async function loadTable(tableKey) {
+      await loadItem({ id: tableKey, label: state.bootstrap.tables[tableKey].name, tableKey });
+    }
+
+    function applyLoadedItem(item, loaded, options = {}) {
+      const previousTableData = state.tableData;
+      state.activeStep = item;
+      state.activeTableKey = item.tableKey || '';
+      state.activeOverviewKey = item.overviewKey || '';
+      state.activePageType = item.pageType || '';
+      state.activeLinkUrl = item.linkUrl || '';
+      state.tableData = item.tableKey ? loaded : null;
+      state.overviewData = item.overviewKey ? loaded : null;
+      if (item.id) setStoredPreference('lastActiveStepId', item.id);
+      if (state.tableData !== previousTableData || options.forceTableVersion) bumpTableRenderVersion();
+    }
+
+    function bumpTableRenderVersion() {
+      state.tableDataVersion = Number(state.tableDataVersion || 0) + 1;
+      state.filteredRowsCache = null;
+      state.filterOptionsCache = {};
+    }
+
+    function resetLoadedItemUiState(item) {
+      state.query = '';
+      state.status = '';
+      state.tableFilters = {};
+      state.filterSearchQuery = '';
+      state.expandedFilterGroups = {};
+      state.filterMenuOpen = false;
+      state.tablePage = 1;
+      state.collapsedTableGroups = {};
+      state.detailRowNumber = null;
+      state.sort = { header: '', direction: 1 };
+      if (!item || !item.tableKey) {
+        state.tableGroupBy = [];
+        clearDefaultGroupInitialCollapse();
+        return;
+      }
+      const preferredView = getStoredPreference('tableViewMode', '');
+      state.tableViewMode = ['table', 'detail', 'card'].includes(preferredView)
+        ? preferredView
+        : getDefaultViewForItem(item);
+      applyDefaultFiltersForActiveView();
+      applyDefaultSortForActiveView();
+      state.tableGroupBy = getDefaultGroupFieldsForActiveTable();
+      markDefaultGroupsForInitialCollapse(state.tableGroupBy);
+      if (state.tableViewMode === 'detail') {
+        const firstRow = filteredRows()[0];
+        state.detailRowNumber = firstRow ? firstRow.rowNumber : null;
+      }
+    }
+
+    function getItemCacheKey(item) {
+      if (!item) return '';
+      if (item.tableKey) return getTableRuntimeCacheKey(item.tableKey);
+      if (item.overviewKey) return `overview:${item.overviewKey}:${serializeClientFilters(getOverviewFilterState(item.overviewKey))}`;
+      if (item.linkUrl) return `link:${item.pageType || 'link'}:${item.linkUrl}`;
+      return '';
+    }
+
+    function readPersistentFullTableData(tableKey) {
+      if (!tableKey) return null;
+      const data = readClientCache('tableFull', tableKey, CLIENT_CACHE_TTL.tableFull);
+      if (isCurrentPersistentTableData_(data)) return data;
+      if (data) removeClientCache('tableFull', tableKey);
+      return null;
+    }
+
+    function readPersistentTableData(tableKey) {
+      if (!tableKey) return { data: null, bucket: '' };
+      const fullData = readPersistentFullTableData(tableKey);
+      if (fullData) return { data: fullData, bucket: 'tableFull' };
+      const initialData = readClientCache('tableInitial', tableKey, CLIENT_CACHE_TTL.tableInitial);
+      if (isCurrentPersistentTableData_(initialData)) return { data: initialData, bucket: 'tableInitial' };
+      if (initialData) removeClientCache('tableInitial', tableKey);
+      return { data: null, bucket: '' };
+    }
+
+    function isCurrentPersistentTableData_(data) {
+      return !!(data
+        && Array.isArray(data.rows)
+        && Number(data.clientTableCacheFormatVersion || 0) === CLIENT_TABLE_CACHE_FORMAT_VERSION);
+    }
+
+    function preparePersistentTableData_(data) {
+      return Object.assign({}, data, {
+        clientTableCacheFormatVersion: CLIENT_TABLE_CACHE_FORMAT_VERSION,
+      });
+    }
+
+    function writePersistentFullTableData(tableKey, data) {
+      if (!tableKey || !data || !Array.isArray(data.rows)) return false;
+      const written = writeClientCache(
+        'tableFull',
+        tableKey,
+        preparePersistentTableData_(data),
+        CLIENT_CACHE_TTL.tableFull
+      );
+      if (written) {
+        removeClientCache('tableInitial', tableKey);
+        const initialCacheKey = getInitialTableRuntimeCacheKey(tableKey);
+        delete state.dataCache[initialCacheKey];
+        delete state.dataCacheMeta[initialCacheKey];
+        console.info('Table cache write:', { tableKey, bucket: 'tableFull', rows: data.rows.length });
+      }
+      return written;
+    }
+
+    function writePersistentInitialTableData(tableKey, data) {
+      if (!tableKey || !data || !Array.isArray(data.rows)) return false;
+      return writeClientCache(
+        'tableInitial',
+        tableKey,
+        preparePersistentTableData_(data),
+        CLIENT_CACHE_TTL.tableInitial
+      );
+    }
+
+    function fetchItemData(item, force = false) {
+      const cacheKey = getItemCacheKey(item);
+      if (!force && cacheKey && state.dataCache[cacheKey]) return Promise.resolve(state.dataCache[cacheKey]);
+      if (!force && cacheKey && state.inFlight[cacheKey]) return state.inFlight[cacheKey];
+      if (!force && item && item.tableKey && cacheKey) {
+        const persistentFull = readPersistentFullTableData(item.tableKey);
+        if (persistentFull) {
+          state.dataCache[cacheKey] = persistentFull;
+          state.dataCacheMeta[cacheKey] = Date.now();
+          return Promise.resolve(persistentFull);
+        }
+      }
+
+      const request = item.overviewKey
+        ? gasCall('getOverviewData', item.overviewKey, force, getOverviewFilterState(item.overviewKey))
+        : item.linkUrl
+        ? Promise.resolve({})
+        : gasCall('getTableData', item.tableKey, force);
+
+      const promise = request.then((data) => {
+        if (cacheKey) {
+          state.dataCache[cacheKey] = data;
+          state.dataCacheMeta[cacheKey] = Date.now();
+        }
+        if (item && item.tableKey && data && Array.isArray(data.rows)) writePersistentFullTableData(item.tableKey, data);
+        return data;
+      }).finally(() => {
+        if (cacheKey) delete state.inFlight[cacheKey];
+      });
+
+      if (!force && cacheKey) state.inFlight[cacheKey] = promise;
+      return promise;
+    }
+
+    function needsFullFieldSchema(data) {
+      if (!data || !Array.isArray(data.fields) || !data.fields.length) return true;
+      if (data.schemaMode === 'light') return true;
+      if (data.formulaAware !== true) return true;
+      return false;
+    }
+
+    function mergeTableFieldSchema(tableKey, data, schema) {
+      if (!tableKey || !data || !schema || !Array.isArray(schema.fields) || !schema.fields.length) return data;
+      const next = Object.assign({}, data, {
+        fields: schema.fields,
+        validationByHeader: schema.validationByHeader || {},
+        formulaAware: schema.formulaAware === true,
+        formulaHeaders: schema.formulaHeaders || [],
+        schemaGeneratedAt: schema.schemaGeneratedAt || schema.generatedAt || data.schemaGeneratedAt,
+        schemaMode: schema.schemaMode || 'full',
+      });
+      const fullKey = getTableRuntimeCacheKey(tableKey);
+      const initialKey = getInitialTableRuntimeCacheKey(tableKey);
+      if (state.tableData === data || state.activeTableKey === tableKey) state.tableData = next;
+      if (state.editingTableData === data || (state.editing && state.editing.tableKey === tableKey)) state.editingTableData = next;
+      if (state.dataCache[fullKey] === data) state.dataCache[fullKey] = next;
+      if (state.dataCache[initialKey] === data) state.dataCache[initialKey] = next;
+      return next;
+    }
+
+    async function ensureTableFieldSchemaForForms(tableKey, data) {
+      if (!tableKey || !needsFullFieldSchema(data)) return data;
+      const cacheKey = getSchemaRuntimeCacheKey(tableKey);
+      const cached = state.metaCache[cacheKey];
+      if (cached && cached.formulaAware === true) return mergeTableFieldSchema(tableKey, data, cached);
+      const persistent = readClientCache('meta', cacheKey, CLIENT_CACHE_TTL.meta);
+      if (persistent && persistent.formulaAware === true) {
+        state.metaCache[cacheKey] = persistent;
+        return mergeTableFieldSchema(tableKey, data, persistent);
+      }
+      const inFlightKey = `schema:${tableKey}`;
+      const request = state.inFlight[inFlightKey] || gasCall('getTableSchema', tableKey, true)
+        .then((schema) => {
+          state.metaCache[cacheKey] = schema;
+          writeClientCache('meta', cacheKey, schema, CLIENT_CACHE_TTL.meta);
+          return schema;
+        })
+        .finally(() => {
+          delete state.inFlight[inFlightKey];
+        });
+      state.inFlight[inFlightKey] = request;
+      const schema = await request;
+      return mergeTableFieldSchema(tableKey, data, schema);
+    }
+
+    function refreshTableSchemaInBackground(tableKey, data, cacheKey) {
+      const inFlightKey = `schemaRefresh:${tableKey}`;
+      if (!tableKey || state.inFlight[inFlightKey]) return;
+      state.inFlight[inFlightKey] = gasCall('getTableSchema', tableKey, true)
+        .then((schema) => {
+          if (!schema || !Array.isArray(schema.fields) || !schema.fields.length) return;
+          state.metaCache[cacheKey] = schema;
+          writeClientCache('meta', cacheKey, schema, CLIENT_CACHE_TTL.meta);
+          mergeTableFieldSchema(tableKey, data, schema);
+        })
+        .catch((error) => console.warn('Table schema refresh skipped:', error))
+        .finally(() => {
+          delete state.inFlight[inFlightKey];
+        });
+    }
+
+    function scheduleActiveFormReadiness(item) {
+      const tableKey = item && item.tableKey ? item.tableKey : '';
+      if (!tableKey || state.formReadinessPromises[tableKey]) {
+        return tableKey ? state.formReadinessPromises[tableKey] || Promise.resolve() : Promise.resolve();
+      }
+      const startedAt = Date.now();
+      let ready = false;
+      const promise = new Promise((resolve) => {
+        window.requestAnimationFrame(() => window.setTimeout(resolve, 120));
+      })
+        .then(() => warmActiveFormReadiness(item))
+        .then((result) => {
+          ready = !!result;
+          console.info('Form preload performance:', {
+            tableKey,
+            ms: Date.now() - startedAt,
+            ready: !!result,
+          });
+          return result;
+        })
+        .catch((error) => {
+          console.warn('Form preload skipped:', error);
+          return null;
+        })
+        .finally(() => {
+          if ((!ready || state.activeTableKey !== tableKey) && state.formReadinessPromises[tableKey] === promise) {
+            delete state.formReadinessPromises[tableKey];
+          }
+        });
+      state.formReadinessPromises[tableKey] = promise;
+      return promise;
+    }
+
+    async function warmActiveFormReadiness(item) {
+      const tableKey = item && item.tableKey ? item.tableKey : '';
+      if (!tableKey || state.activeTableKey !== tableKey) return null;
+      await hydrateDeferredUiConfig();
+      if (state.activeTableKey !== tableKey) return null;
+      const data = state.tableData
+        || state.dataCache[getInitialTableRuntimeCacheKey(tableKey)]
+        || state.dataCache[getTableRuntimeCacheKey(tableKey)];
+      return data ? ensureTableFieldSchemaForForms(tableKey, data) : null;
+    }
+
+    function scheduleFullTableHydration(item) {
+      const tableKey = item && item.tableKey ? item.tableKey : '';
+      if (!tableKey || state.activeTableKey !== tableKey) return;
+      const serverPage = state.tableData && state.tableData.serverPage;
+      if (!serverPage) return;
+      const previousHydration = state.tableHydration[tableKey] || {};
+      const startedAt = Number(previousHydration.startedAt || Date.now());
+      if (serverPage.fullyLoaded) {
+        const loadedAt = Date.now();
+        const cacheKey = getItemCacheKey(item);
+        if (cacheKey) {
+          state.dataCache[cacheKey] = state.tableData;
+          state.dataCacheMeta[cacheKey] = loadedAt;
+        }
+        const persisted = writePersistentFullTableData(tableKey, state.tableData);
+        if (!persisted) console.warn('Full table localStorage cache was skipped:', tableKey);
+        state.tableHydration[tableKey] = {
+          status: 'ready',
+          source: previousHydration.source || '',
+          startedAt,
+          loadedAt,
+          durationMs: loadedAt - startedAt,
+          rows: state.tableData && state.tableData.rows ? state.tableData.rows.length : 0,
+          totalRows: state.tableData && state.tableData.rows ? state.tableData.rows.length : 0,
+        };
+        if (typeof refreshTableHydrationIndicator === 'function') refreshTableHydrationIndicator();
+        return;
+      }
+      const token = `${tableKey}:background:${Date.now()}`;
+      state.tableBackgroundLoadToken = token;
+      state.tableHydration[tableKey] = {
+        status: 'scheduled',
+        startedAt,
+        initialRows: state.tableData && state.tableData.rows ? state.tableData.rows.length : 0,
+        rows: state.tableData && state.tableData.rows ? state.tableData.rows.length : 0,
+        totalRows: Number(serverPage.totalRows || serverPage.totalEstimate || 0),
+      };
+      if (typeof refreshTableHydrationIndicator === 'function') refreshTableHydrationIndicator();
+      const startHydration = () => {
+        if (state.activeTableKey === tableKey && state.tableBackgroundLoadToken === token) {
+          hydrateTableDataInBackground_(item, token);
+        }
+      };
+      const readiness = state.formReadinessPromises[tableKey];
+      if (!readiness) {
+        window.requestAnimationFrame(() => window.setTimeout(startHydration, 80));
+        return;
+      }
+      let started = false;
+      const startOnce = () => {
+        if (started) return;
+        started = true;
+        startHydration();
+      };
+      readiness.finally(startOnce);
+      window.setTimeout(startOnce, 2500);
+    }
+
+    async function hydrateTableDataInBackground_(item, token) {
+      const tableKey = item && item.tableKey ? item.tableKey : '';
+      let accumulated = state.tableData;
+      if (!tableKey || !accumulated || !accumulated.serverPage) return;
+      const previousHydration = state.tableHydration[tableKey] || {};
+      const startedAt = Number(previousHydration.startedAt || Date.now());
+      state.tableHydration[tableKey] = {
+        status: 'loading',
+        startedAt,
+        initialRows: accumulated.rows ? accumulated.rows.length : 0,
+        rows: accumulated.rows ? accumulated.rows.length : 0,
+        totalRows: Number(accumulated.serverPage.totalRows || accumulated.serverPage.totalEstimate || 0),
+      };
+      if (typeof refreshTableHydrationIndicator === 'function') refreshTableHydrationIndicator();
+      try {
+        while (accumulated.serverPage.nextCursor !== '') {
+          if (state.activeTableKey !== tableKey || state.tableBackgroundLoadToken !== token) return;
+          const nextPage = Number(accumulated.serverPage.page || 1) + 1;
+          const incoming = await fetchServerTablePage(item, {
+            page: nextPage,
+            pageSize: CLIENT_BACKGROUND_TABLE_BATCH_SIZE,
+            cursor: Number(accumulated.serverPage.nextCursor || 0),
+            snapshotEndRow: Number(accumulated.serverPage.snapshotEndRow || 0),
+            resetQuery: true,
+          });
+          if (state.activeTableKey !== tableKey || state.tableBackgroundLoadToken !== token) return;
+          accumulated = mergeServerTablePage_(accumulated, incoming);
+          state.tableData = accumulated;
+          state.tableBackgroundRetries[tableKey] = 0;
+          bumpTableRenderVersion();
+          state.tableHydration[tableKey] = Object.assign({}, state.tableHydration[tableKey], {
+            status: 'loading',
+            rows: accumulated.rows ? accumulated.rows.length : 0,
+            totalRows: Number(accumulated.serverPage.totalRows || accumulated.serverPage.totalEstimate || 0),
+          });
+          if (typeof refreshTableHydrationIndicator === 'function') refreshTableHydrationIndicator();
+        }
+        accumulated = await hydrateAppendedTableRows_(item, accumulated, token);
+        if (state.activeTableKey !== tableKey || state.tableBackgroundLoadToken !== token) return;
+        accumulated.serverPage = Object.assign({}, accumulated.serverPage, {
+          fullyLoaded: true,
+          loadedRows: accumulated.rows ? accumulated.rows.length : 0,
+          totalRows: accumulated.rows ? accumulated.rows.length : 0,
+          totalEstimate: accumulated.rows ? accumulated.rows.length : 0,
+          totalExact: true,
+          nextCursor: '',
+        });
+        const cacheKey = getItemCacheKey(item);
+        state.dataCache[cacheKey] = accumulated;
+        state.dataCacheMeta[cacheKey] = Date.now();
+        if (!writePersistentFullTableData(tableKey, accumulated)) {
+          console.warn('Full table localStorage cache was skipped:', tableKey);
+        }
+        applyLoadedItem(item, accumulated, { forceTableVersion: true });
+        applyServerPageState(accumulated);
+        state.tableHydration[tableKey] = {
+          status: 'ready',
+          startedAt,
+          loadedAt: Date.now(),
+          durationMs: Date.now() - startedAt,
+          rows: accumulated.rows ? accumulated.rows.length : 0,
+          totalRows: accumulated.rows ? accumulated.rows.length : 0,
+        };
+        delete state.tableBackgroundRetries[tableKey];
+        renderPageAfterTableHydration();
+      } catch (error) {
+        if (state.activeTableKey !== tableKey || state.tableBackgroundLoadToken !== token) return;
+        const retryCount = Number(state.tableBackgroundRetries[tableKey] || 0) + 1;
+        const retryDelay = Math.min(30000, 1500 * Math.pow(2, Math.min(retryCount - 1, 5)));
+        state.tableBackgroundRetries[tableKey] = retryCount;
+        state.tableHydration[tableKey] = {
+          status: 'retrying',
+          startedAt,
+          failedAt: Date.now(),
+          retryCount,
+          rows: accumulated && accumulated.rows ? accumulated.rows.length : 0,
+          totalRows: accumulated && accumulated.serverPage
+            ? Number(accumulated.serverPage.totalRows || accumulated.serverPage.totalEstimate || 0)
+            : 0,
+        };
+        if (typeof refreshTableHydrationIndicator === 'function') refreshTableHydrationIndicator();
+        console.warn(`Background table hydration retry ${retryCount}:`, error);
+        window.setTimeout(() => {
+          if (state.activeTableKey === tableKey && state.tableBackgroundLoadToken === token) {
+            scheduleFullTableHydration(item);
+          }
+        }, retryDelay);
+      }
+    }
+
+    function fetchServerTablePage(item, options = {}) {
+      const tableKey = item && item.tableKey ? item.tableKey : '';
+      if (!tableKey) return Promise.reject(new Error('Missing table key.'));
+      const startedAt = Date.now();
+      return gasCall('getTablePage', {
+        tableKey,
+        page: Math.max(1, Number(options.page || state.tablePage || 1)),
+        pageSize: Math.max(50, Math.min(1000, Number(options.pageSize || state.tablePageSize || CLIENT_INITIAL_TABLE_BATCH_SIZE))),
+        cursor: Math.max(0, Number(options.cursor || 0)),
+        snapshotEndRow: Math.max(0, Number(options.snapshotEndRow || 0)),
+        query: '',
+        status: '',
+        filters: {},
+        sort: { header: '', direction: 1 },
+        filterHeaders: [],
+      }).then((data) => {
+        console.info('Table page performance:', Object.assign({
+          tableKey,
+          rpcMs: Date.now() - startedAt,
+        }, data && data.performance || {}));
+        return data;
+      });
+    }
+
+    function fetchServerTableDelta(item, afterRowNumber) {
+      const tableKey = item && item.tableKey ? item.tableKey : '';
+      if (!tableKey) return Promise.reject(new Error('Missing table key.'));
+      return gasCall('getTableDataDelta', {
+        tableKey,
+        afterRowNumber: Math.max(0, Number(afterRowNumber || 0)),
+        scanLimit: CLIENT_BACKGROUND_TABLE_BATCH_SIZE,
+      });
+    }
+
+    async function hydrateAppendedTableRows_(item, current, token) {
+      const tableKey = item && item.tableKey ? item.tableKey : '';
+      let accumulated = current;
+      let scannedThroughRow = Number(
+        accumulated && accumulated.serverPage && accumulated.serverPage.snapshotEndRow || 0
+      );
+      if (!tableKey || !scannedThroughRow) return accumulated;
+
+      let hasMore = true;
+      while (hasMore) {
+        if (state.activeTableKey !== tableKey || state.tableBackgroundLoadToken !== token) return accumulated;
+        const delta = await fetchServerTableDelta(item, scannedThroughRow);
+        if (state.activeTableKey !== tableKey || state.tableBackgroundLoadToken !== token) return accumulated;
+        const deltaPage = delta && delta.deltaPage ? delta.deltaPage : {};
+        accumulated = mergeTableDelta_(accumulated, delta);
+        const nextScannedThroughRow = Number(deltaPage.scannedThroughRow || scannedThroughRow);
+        hasMore = !!deltaPage.hasMore && nextScannedThroughRow > scannedThroughRow;
+        scannedThroughRow = Math.max(scannedThroughRow, nextScannedThroughRow);
+        accumulated.serverPage = Object.assign({}, accumulated.serverPage, {
+          snapshotEndRow: Math.max(
+            scannedThroughRow,
+            Number(deltaPage.snapshotEndRow || 0)
+          ),
+          loadedRows: accumulated.rows ? accumulated.rows.length : 0,
+        });
+        state.tableData = accumulated;
+        bumpTableRenderVersion();
+        state.tableHydration[tableKey] = Object.assign({}, state.tableHydration[tableKey], {
+          status: 'loading',
+          rows: accumulated.rows ? accumulated.rows.length : 0,
+        });
+        if (typeof refreshTableHydrationIndicator === 'function') refreshTableHydrationIndicator();
+      }
+      return accumulated;
+    }
+
+    function loadActiveTablePage(options = {}) {
+      const item = state.activeStep;
+      const tableKey = item && item.tableKey ? item.tableKey : state.activeTableKey;
+      if (!tableKey || state.tableDataLoading) return Promise.resolve(null);
+      const activeItem = item && item.tableKey === tableKey ? item : { id: tableKey, label: tableKey, tableKey };
+      const token = `${tableKey}:page:${Date.now()}`;
+      state.tablePageRequestToken = token;
+      state.tableBackgroundLoadToken = '';
+      state.tableHydration[tableKey] = {
+        status: 'loading',
+        startedAt: Date.now(),
+        rows: 0,
+        totalRows: state.tableData && state.tableData.serverPage
+          ? Number(state.tableData.serverPage.totalRows || state.tableData.serverPage.totalEstimate || 0)
+          : 0,
+      };
+      setTableDataLoading(true);
+      renderPageAfterTableHydration();
+      return fetchServerTablePage(activeItem, options)
+        .then((data) => {
+          if (state.tablePageRequestToken !== token || state.activeTableKey !== tableKey) return null;
+          if (!data || !Array.isArray(data.rows)) throw new Error('Invalid table page response.');
+          const loadedData = data;
+          const cacheKey = getItemCacheKey(activeItem);
+          state.dataCache[cacheKey] = loadedData;
+          state.dataCacheMeta[cacheKey] = Date.now();
+          removeClientCache('tableFull', tableKey);
+          writePersistentInitialTableData(tableKey, loadedData);
+          applyLoadedItem(activeItem, loadedData, { forceTableVersion: true });
+          applyServerPageState(loadedData);
+          state.tableHydration[tableKey] = Object.assign({}, state.tableHydration[tableKey], {
+            status: 'loading',
+            rows: loadedData.rows.length,
+            totalRows: Number(loadedData.serverPage && (loadedData.serverPage.totalRows || loadedData.serverPage.totalEstimate) || loadedData.rows.length),
+          });
+          if (typeof updateDetailSelectionAfterFilters === 'function') updateDetailSelectionAfterFilters();
+          scheduleFullTableHydration(activeItem);
+          return loadedData;
+        })
+        .catch((error) => {
+          showError(error);
+          return null;
+        })
+        .finally(() => {
+          if (state.tablePageRequestToken !== token) return;
+          setTableDataLoading(false);
+          renderPageAfterTableHydration();
+        });
+    }
+
+    function mergeServerTablePage_(current, incoming) {
+      if (!current || !Array.isArray(current.rows)) return incoming;
+      const rows = current.rows.slice();
+      const rowNumbers = new Set(rows.map((row) => Number(row && row.rowNumber)).filter(Number.isFinite));
+      (incoming.rows || []).forEach((row) => {
+        const rowNumber = Number(row && row.rowNumber);
+        if (Number.isFinite(rowNumber) && rowNumbers.has(rowNumber)) return;
+        rows.push(row);
+        if (Number.isFinite(rowNumber)) rowNumbers.add(rowNumber);
+      });
+      const currentPage = current.serverPage || {};
+      const incomingPage = incoming.serverPage || {};
+      return Object.assign({}, current, incoming, {
+        rows,
+        filterFacets: incoming.filterFacets && Object.keys(incoming.filterFacets).length
+          ? incoming.filterFacets
+          : current.filterFacets,
+        serverPage: Object.assign({}, currentPage, incomingPage, {
+          page: Math.max(Number(currentPage.page || 1), Number(incomingPage.page || 1)),
+          loadedRows: rows.length,
+          startIndex: 0,
+          endIndex: rows.length,
+        }),
+      });
+    }
+
+    function mergeTableDelta_(current, delta) {
+      if (!current || !Array.isArray(current.rows) || !delta || !Array.isArray(delta.rows)) return current;
+      const rows = current.rows.slice();
+      const rowNumbers = new Set(rows.map((row) => Number(row && row.rowNumber)).filter(Number.isFinite));
+      delta.rows.forEach((row) => {
+        const rowNumber = Number(row && row.rowNumber);
+        if (Number.isFinite(rowNumber) && rowNumbers.has(rowNumber)) return;
+        rows.push(row);
+        if (Number.isFinite(rowNumber)) rowNumbers.add(rowNumber);
+      });
+      rows.sort((left, right) => Number(left && left.rowNumber || 0) - Number(right && right.rowNumber || 0));
+      return Object.assign({}, current, {
+        rows,
+        summary: makeClientSummary(current.headers || [], rows),
+      });
+    }
+
+    function applyServerPageState(data) {
+      const serverPage = data && data.serverPage ? data.serverPage : null;
+      if (!serverPage) return;
+      state.tablePage = Math.max(1, Number(serverPage.page || 1));
+      state.tablePageSize = CLIENT_INITIAL_TABLE_BATCH_SIZE;
+    }
+
+    function setTableDataLoading(loading) {
+      state.tableDataLoading = !!loading;
+      document.body.classList.toggle('table-data-loading', !!loading);
+      document.body.setAttribute('aria-busy', loading ? 'true' : 'false');
+      if (el.content) el.content.setAttribute('aria-busy', loading ? 'true' : 'false');
+    }
+
+    function renderPageAfterTableHydration() {
+      if (typeof renderPagePreservingTableFocus === 'function') renderPagePreservingTableFocus();
+      else renderPage();
+    }
+
+
+    function getOverviewFilterState(overviewKey) {
+      return (state.overviewFilters && state.overviewFilters[overviewKey]) || {};
+    }
+
+    function setOverviewFilterState(overviewKey, key, value) {
+      if (!state.overviewFilters) state.overviewFilters = {};
+      const current = { ...(state.overviewFilters[overviewKey] || {}) };
+      if (value == null || value === '' || value === '__all__') delete current[key];
+      else current[key] = value;
+      state.overviewFilters[overviewKey] = current;
+      return current;
+    }
+
+    function serializeClientFilters(filters) {
+      return Object.keys(filters || {})
+        .sort()
+        .map((key) => `${key}=${Array.isArray(filters[key]) ? filters[key].join('|') : filters[key]}`)
+        .join('&');
+    }
+
+    function prepareRouteLoading(item) {
+      state.routeLoading = true;
+      state.pendingStep = item;
+      if (item) {
+        el.pageTitle.textContent = item.label || getProcessName();
+        el.breadcrumb.textContent = getStepPath(item.id).join(' / ') || 'Operation';
+      }
+      renderSidebar();
+      resetDocumentScroll(true);
+      setRouteLoading(true, item && item.label ? `Loading ${item.label}` : 'Loading page');
+    }
+
+    function initScrollRestoration() {
+      try {
+        if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual';
+      } catch (error) {}
+      resetDocumentScroll(true);
+    }
+
+    function markRouteScrollReset() {
+      state.shouldResetRouteScroll = true;
+      state.routeScrollResetUntil = Date.now() + 1400;
+      state.routeScrollResetUserActivityAt = state.lastUserActivityAt || 0;
+      resetDocumentScroll(true);
+    }
+
+    function resetRouteScrollAfterRender() {
+      if (!state.shouldResetRouteScroll) return;
+      state.shouldResetRouteScroll = false;
+      keepRouteAtTopAfterAsyncRender();
+    }
+
+    function keepRouteAtTopAfterAsyncRender() {
+      const resetIfSafe = () => {
+        if (state.lastUserActivityAt !== state.routeScrollResetUserActivityAt) return;
+        if (Date.now() > state.routeScrollResetUntil) return;
+        resetDocumentScroll(true);
+      };
+      resetIfSafe();
+      window.requestAnimationFrame(resetIfSafe);
+      [60, 180, 420, 900, 1320].forEach((delay) => {
+        window.setTimeout(resetIfSafe, delay);
+      });
+    }
+
+    function resetDocumentScroll(immediate) {
+      const run = () => {
+        try {
+          if (window.scrollTo) window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+          [
+            document.scrollingElement,
+            document.documentElement,
+            document.body,
+            el.sidebar,
+            document.querySelector('.main'),
+            el.content
+          ].forEach((node) => {
+            if (!node) return;
+            node.scrollTop = 0;
+            node.scrollLeft = 0;
+          });
+        } catch (error) {}
+      };
+      if (immediate) run();
+      else window.requestAnimationFrame(run);
+    }
+
+    function setRouteLoading(loading, message) {
+      state.routeLoading = !!loading;
+      document.body.classList.toggle('route-loading', !!loading);
+      document.body.toggleAttribute('aria-busy', !!loading);
+      syncPageLoader(loading, message);
+    }
+
+    function installUserIdleTracking() {
+      if (state.prefetchInstalled) return;
+      state.prefetchInstalled = true;
+      const update = () => {
+        state.lastUserActivityAt = Date.now();
+      };
+      ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach((eventName) => {
+        window.addEventListener(eventName, update, { passive: true });
+      });
+      document.addEventListener('visibilitychange', update);
+    }
+
+    function schedulePrefetchNavigationData(delay = 0) {
+      if (state.prefetchTimer || state.prefetchingAll || !isPrefetchEnabled()) return;
+      state.prefetchTimer = window.setTimeout(() => {
+        state.prefetchTimer = null;
+        waitForUserIdle(() => {
+          if ('requestIdleCallback' in window) window.requestIdleCallback(() => prefetchNavigationData(), { timeout: 2600 });
+          else window.setTimeout(prefetchNavigationData, 1200);
+        });
+      }, Math.max(0, Number(delay || 0)));
+    }
+
+    function prefetchNavigationData() {
+      if (state.prefetchingAll || !state.bootstrap || !isReadyForBackgroundPrefetch()) return;
+      const limit = getUserPrefetchLimit();
+      if (limit <= 0) return;
+      const items = prioritizePrefetchItems(flattenNavItems(state.bootstrap.navigation))
+        .filter((item) => item.tableKey);
+      const unique = [];
+      const seen = new Set();
+      items.forEach((item) => {
+        const key = getItemCacheKey(item);
+        if (!key || seen.has(key) || state.dataCache[key]) return;
+        seen.add(key);
+        unique.push(item);
+      });
+      prefetchItemQueue(unique.slice(0, limit));
+    }
+
+    async function prefetchItemQueue(items) {
+      if (!items || !items.length) return;
+      state.prefetchingAll = true;
+      let shouldResume = false;
+      try {
+        for (let index = 0; index < items.length; index += 1) {
+          if (!isReadyForBackgroundPrefetch()) {
+            shouldResume = true;
+            break;
+          }
+          await waitForUserIdlePromise();
+          const item = items[index];
+          const key = getItemCacheKey(item);
+          if (key && !state.dataCache[key] && !state.metaCache[key]) {
+            await prefetchItemMeta(item).catch(() => null);
+          }
+          await waitForIdle(getUserPrefetchGapMs());
+        }
+      } finally {
+        state.prefetchingAll = false;
+        if (shouldResume) schedulePrefetchNavigationData(getUserPrefetchIdleMs());
+      }
+    }
+
+    function prefetchItemMeta(item) {
+      if (!item || !item.tableKey) return Promise.resolve(null);
+      const key = getItemCacheKey(item);
+      if (key && state.metaCache[key]) {
+        return prefetchTableFormSchema(item.tableKey).catch(() => null).then(() => state.metaCache[key]);
+      }
+      const metaKey = key ? `meta:${key}` : '';
+      if (metaKey && state.inFlight[metaKey]) return state.inFlight[metaKey];
+
+      const promise = gasCall('getTableMeta', item.tableKey, false)
+        .then((meta) => {
+          if (key) state.metaCache[key] = meta || true;
+          return meta;
+        })
+        .then((meta) => prefetchTableFormSchema(item.tableKey).catch(() => null).then(() => meta))
+        .finally(() => {
+          if (metaKey) delete state.inFlight[metaKey];
+        });
+      if (metaKey) state.inFlight[metaKey] = promise;
+      return promise;
+    }
+
+    function prefetchTableFormSchema(tableKey) {
+      if (!tableKey) return Promise.resolve(null);
+      const cacheKey = getSchemaRuntimeCacheKey(tableKey);
+      if (state.metaCache[cacheKey]) return Promise.resolve(state.metaCache[cacheKey]);
+      const persistent = readClientCache('meta', cacheKey, CLIENT_CACHE_TTL.meta);
+      if (persistent && persistent.formulaAware === true) {
+        state.metaCache[cacheKey] = persistent;
+        return Promise.resolve(persistent);
+      }
+      const inFlightKey = `schemaPrefetch:${tableKey}`;
+      if (state.inFlight[inFlightKey]) return state.inFlight[inFlightKey];
+      const promise = gasCall('getTableSchema', tableKey, false)
+        .then((schema) => {
+          if (schema && Array.isArray(schema.fields) && schema.fields.length) {
+            state.metaCache[cacheKey] = schema;
+            writeClientCache('meta', cacheKey, schema, CLIENT_CACHE_TTL.meta);
+          }
+          return schema;
+        })
+        .finally(() => {
+          delete state.inFlight[inFlightKey];
+        });
+      state.inFlight[inFlightKey] = promise;
+      return promise;
+    }
+
+    function waitForUserIdle(callback) {
+      waitForUserIdlePromise().then(callback);
+    }
+
+    function waitForUserIdlePromise() {
+      return new Promise((resolve) => {
+        const check = () => {
+          if (!isReadyForBackgroundPrefetch()) {
+            window.setTimeout(check, 1600);
+            return;
+          }
+          const elapsed = Date.now() - Number(state.lastUserActivityAt || 0);
+          const remaining = getUserPrefetchIdleMs() - elapsed;
+          if (remaining > 0) {
+            window.setTimeout(check, Math.min(remaining, 1800));
+            return;
+          }
+          resolve();
+        };
+        check();
+      });
+    }
+
+    function isReadyForBackgroundPrefetch() {
+      return isPrefetchEnabled()
+        && state.appMode === 'user'
+        && !state.routeLoading
+        && !state.editing
+        && !state.saveQueueRunning
+        && document.visibilityState !== 'hidden';
+    }
+
+    function isPrefetchEnabled() {
+      const appConfig = state.uiConfig && state.uiConfig.app ? state.uiConfig.app : {};
+      return appConfig.enablePrefetch !== false;
+    }
+
+    function waitForIdle(delay) {
+      return new Promise((resolve) => {
+        const done = () => window.setTimeout(resolve, delay || 0);
+        if ('requestIdleCallback' in window) window.requestIdleCallback(done, { timeout: 900 });
+        else done();
+      });
+    }
+
+    function prioritizePrefetchItems(items) {
+      const list = items || [];
+      const activeId = getNavNodeId(state.activeStep);
+      const activeIndex = list.findIndex((item) => getNavNodeId(item) === activeId);
+      if (activeIndex < 0) return list;
+      const before = list.slice(Math.max(0, activeIndex - 4), activeIndex);
+      const after = list.slice(activeIndex + 1, activeIndex + 7);
+      const rest = list.filter((item, index) => index < activeIndex - 4 || index > activeIndex + 6);
+      return [list[activeIndex]].concat(after, before, rest);
+    }
+
+    function getUserPrefetchLimit() {
+      const appConfig = state.uiConfig && state.uiConfig.app ? state.uiConfig.app : {};
+      if (appConfig.enablePrefetch === false) return 0;
+      const fallback = document.body.classList.contains('mobile-viewport') ? 2 : 4;
+      const limit = Number(appConfig.prefetchLimit || fallback);
+      if (!Number.isFinite(limit)) return fallback;
+      return Math.max(0, Math.min(8, Math.round(limit)));
+    }
+
+    function getUserPrefetchIdleMs() {
+      const appConfig = state.uiConfig && state.uiConfig.app ? state.uiConfig.app : {};
+      const value = Number(appConfig.prefetchIdleMs || 10000);
+      return Number.isFinite(value) ? Math.max(5000, Math.min(30000, value)) : 10000;
+    }
+
+    function getUserPrefetchGapMs() {
+      const appConfig = state.uiConfig && state.uiConfig.app ? state.uiConfig.app : {};
+      const value = Number(appConfig.prefetchGapMs || 3000);
+      return Number.isFinite(value) ? Math.max(1500, Math.min(10000, value)) : 3000;
+    }
+
+    function flattenNavItems(items) {
+      return (items || []).flatMap((item) => [item].concat(item.children ? flattenNavItems(item.children) : []));
+    }
+

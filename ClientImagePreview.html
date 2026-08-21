@@ -1,0 +1,308 @@
+    /*
+      Optional image preview enhancer.
+      Keep this module isolated from core rendering; any failure must not block
+      table, drawer, or navigation flows.
+    */
+    function enhanceImagePreviewSafe(mode) {
+      try {
+        clearImagePreviewCards(mode);
+        var candidate = getImagePreviewCandidate(mode);
+        window.__imagePreviewLastCandidate = candidate;
+        if (mode === 'detail') renderDetailImagePreview(candidate);
+        if (mode === 'form') renderFormImagePreview(candidate);
+      } catch (error) {
+        window.__imagePreviewLastCandidate = null;
+        if (window.console && console.warn) console.warn('Image preview skipped', error);
+      }
+    }
+
+    document.addEventListener('error', function (event) {
+      var img = event && event.target ? event.target : null;
+      if (!img || !img.getAttribute || !img.getAttribute('data-card-preview-urls')) return;
+      if (tryNextCardImagePreviewUrl(img)) return;
+      var media = img.closest ? img.closest('.table-data-card-media') : null;
+      if (media) media.classList.add('is-broken');
+    }, true);
+
+    function tryNextCardImagePreviewUrl(img) {
+      var rawUrls = String(img.getAttribute('data-card-preview-urls') || '');
+      var urls = rawUrls.split(/\n+/).map(function (url) { return url.trim(); }).filter(Boolean);
+      var currentIndex = Number(img.getAttribute('data-preview-index') || '0');
+      var nextIndex = currentIndex + 1;
+      if (!urls.length || nextIndex >= urls.length) return false;
+      img.setAttribute('data-preview-index', String(nextIndex));
+      img.src = urls[nextIndex];
+      return true;
+    }
+
+    function getImagePreviewCandidate(mode) {
+      var source = getImagePreviewSource(mode);
+      if (!source) return null;
+      var headers = source.headers || [];
+      var record = source.record || {};
+      for (var i = 0; i < headers.length; i += 1) {
+        var field = headers[i];
+        var value = record[field];
+        var url = extractImagePreviewUrl(value);
+        if (url && (isImageFieldName(field) || isLikelyImageUrl(url))) {
+          return {
+            field: field,
+            url: url,
+            previewUrl: normalizeImagePreviewUrl(url),
+            previewUrls: getImagePreviewUrls(url),
+            mode: mode || ''
+          };
+        }
+      }
+      return null;
+    }
+
+    function getImagePreviewSource(mode) {
+      if (!state || !state.tableData) return null;
+      if (mode === 'form') return getFormImagePreviewSource();
+      return getDetailImagePreviewSource();
+    }
+
+    function getDetailImagePreviewSource() {
+      if (!state.tableData || !state.tableData.headers) return null;
+      var rows = typeof filteredRows === 'function' ? filteredRows() : (state.tableData.rows || []);
+      var selected = null;
+      for (var i = 0; i < rows.length; i += 1) {
+        if (rows[i].rowNumber === state.detailRowNumber) {
+          selected = rows[i];
+          break;
+        }
+      }
+      if (!selected && rows.length) selected = rows[0];
+      return selected ? { headers: state.tableData.headers, record: selected.record || {} } : null;
+    }
+
+    function getFormImagePreviewSource() {
+      var fields = normalizeFormFields(state.tableData.fields || state.tableData.headers || []);
+      var headers = [];
+      var record = {};
+      for (var i = 0; i < fields.length; i += 1) {
+        var name = fields[i].name;
+        headers.push(name);
+        var control = el.recordForm && el.recordForm.elements
+          ? el.recordForm.elements.namedItem(name)
+          : null;
+        record[name] = control && typeof control.value !== 'undefined'
+          ? control.value
+          : (state.editing && state.editing.record ? state.editing.record[name] : '');
+      }
+      return { headers: headers, record: record };
+    }
+
+    function isImageFieldName(field) {
+      return /(^|[\s_\-])(image|img|photo|picture|pic|thumbnail|thumb|avatar|logo|visual|hero|cover|media|asset|artwork)([\s_\-]|$)|image\s*url|photo\s*url|url\s*image|url\s*photo/i.test(String(field || ''));
+    }
+
+    function isLikelyImageUrl(url) {
+      var clean = String(url || '').split('?')[0].split('#')[0];
+      return /^https?:\/\//i.test(url)
+        && /\.(png|jpe?g|webp|gif|svg|avif|bmp|tiff?)$/i.test(clean);
+    }
+
+    function extractImagePreviewUrl(value) {
+      var text = String(value || '').trim();
+      if (!text) return '';
+      var match = text.match(/https?:\/\/[^\s"'<>]+/i);
+      return match ? match[0].replace(/[),.;]+$/, '') : '';
+    }
+
+    function normalizeImagePreviewUrl(url) {
+      var urls = getImagePreviewUrls(url);
+      return urls[0] || url;
+    }
+
+    function getImagePreviewUrls(url) {
+      var urls = [];
+      var driveId = extractGoogleDriveFileId(url);
+      if (driveId) {
+        var encoded = encodeURIComponent(driveId);
+        urls.push('https://drive.google.com/thumbnail?id=' + encoded + '&sz=w1000');
+        urls.push('https://drive.google.com/uc?export=view&id=' + encoded);
+        urls.push('https://drive.usercontent.google.com/download?id=' + encoded + '&export=view');
+      }
+      urls.push(url);
+      return uniqueImagePreviewUrls(urls);
+    }
+
+    function uniqueImagePreviewUrls(urls) {
+      var seen = {};
+      var result = [];
+      for (var i = 0; i < urls.length; i += 1) {
+        var item = String(urls[i] || '');
+        if (!item || seen[item]) continue;
+        seen[item] = true;
+        result.push(item);
+      }
+      return result;
+    }
+
+    function extractGoogleDriveFileId(url) {
+      var text = String(url || '');
+      var fileMatch = text.match(/drive\.google\.com\/file\/d\/([^/]+)/i);
+      if (fileMatch && fileMatch[1]) return fileMatch[1];
+      var idMatch = text.match(/[?&]id=([^&]+)/i);
+      if (/drive\.google\.com|docs\.google\.com/i.test(text) && idMatch && idMatch[1]) return idMatch[1];
+      return '';
+    }
+
+    function renderDetailImagePreview(candidate) {
+      if (!candidate || !state || state.tableViewMode !== 'detail') return;
+      var field = findDetailPreviewField(candidate.field);
+      if (!field) return;
+      var label = field.querySelector('span');
+      var card = createImagePreviewCard(candidate, 'detail-inline');
+      field.classList.add('has-inline-image-preview');
+      if (label && label.nextSibling) {
+        field.insertBefore(card, label.nextSibling);
+      } else {
+        field.insertBefore(card, field.firstChild);
+      }
+    }
+
+    function renderFormImagePreview(candidate) {
+      var form = el && el.recordForm ? el.recordForm : null;
+      if (!form) return;
+      bindFormImagePreviewEvents(form);
+      if (!candidate) return;
+      var control = findFormPreviewControl(candidate.field);
+      if (!control) return;
+      var label = control.querySelector('span');
+      var card = createImagePreviewCard(candidate, 'form-inline');
+      control.classList.add('has-inline-image-preview');
+      if (label && label.nextSibling) {
+        control.insertBefore(card, label.nextSibling);
+      } else {
+        control.insertBefore(card, control.firstChild);
+      }
+    }
+
+    function bindFormImagePreviewEvents(form) {
+      if (form.getAttribute('data-image-preview-bound') === '1') return;
+      form.setAttribute('data-image-preview-bound', '1');
+      form.addEventListener('input', handleFormImagePreviewInput);
+      form.addEventListener('change', handleFormImagePreviewInput);
+    }
+
+    function handleFormImagePreviewInput(event) {
+      var target = event && event.target ? event.target : null;
+      if (!target || !target.name) return;
+      if (!isImageFieldName(target.name) && !extractImagePreviewUrl(target.value)) return;
+      window.clearTimeout(window.__imagePreviewFormTimer);
+      window.__imagePreviewFormTimer = window.setTimeout(function () {
+        enhanceImagePreviewSafe('form');
+      }, 140);
+    }
+
+    function clearImagePreviewCards(mode) {
+      var cards = document.querySelectorAll('[data-image-preview-card]');
+      for (var i = 0; i < cards.length; i += 1) {
+        if (!imagePreviewCardMatchesMode(cards[i], mode)) continue;
+        cards[i].parentNode.removeChild(cards[i]);
+      }
+      var panes = document.querySelectorAll('.has-image-preview');
+      for (var j = 0; j < panes.length; j += 1) {
+        panes[j].classList.remove('has-image-preview');
+      }
+      var fields = document.querySelectorAll('.has-inline-image-preview');
+      for (var k = 0; k < fields.length; k += 1) {
+        if (mode === 'form' && fields[k].classList && fields[k].classList.contains('detail-field')) continue;
+        if (mode === 'detail' && fields[k].classList && fields[k].classList.contains('form-control')) continue;
+        fields[k].classList.remove('has-inline-image-preview');
+      }
+    }
+
+    function imagePreviewCardMatchesMode(card, mode) {
+      if (!mode) return true;
+      if (mode === 'form') {
+        return card.classList.contains('form-inline-image-preview') || card.classList.contains('form-image-preview');
+      }
+      if (mode === 'detail') {
+        return card.classList.contains('detail-inline-image-preview') || card.classList.contains('detail-image-preview');
+      }
+      return true;
+    }
+
+    function findDetailPreviewField(fieldName) {
+      var fields = document.querySelectorAll('.detail-field');
+      for (var i = 0; i < fields.length; i += 1) {
+        if (fields[i].getAttribute('data-detail-field') === fieldName) return fields[i];
+        var label = fields[i].querySelector('span');
+        if (label && label.textContent === fieldName) return fields[i];
+      }
+      return null;
+    }
+
+    function findFormPreviewControl(fieldName) {
+      var controls = document.querySelectorAll('.form-control');
+      for (var i = 0; i < controls.length; i += 1) {
+        if (controls[i].getAttribute('data-form-field') === fieldName) return controls[i];
+        var label = controls[i].querySelector('span');
+        if (label && label.textContent === fieldName) return controls[i];
+      }
+      return null;
+    }
+
+    function createImagePreviewCard(candidate, placement) {
+      var card = document.createElement('aside');
+      card.className = 'image-preview-card ' + placement + '-image-preview';
+      card.setAttribute('data-image-preview-card', '');
+
+      var link = document.createElement('a');
+      link.className = 'image-preview-frame';
+      link.href = candidate.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.title = 'Open image';
+
+      var placeholder = document.createElement('span');
+      placeholder.className = 'image-preview-placeholder';
+      placeholder.textContent = 'Preview';
+
+      var img = document.createElement('img');
+      img.alt = candidate.field + ' preview';
+      img.setAttribute('data-preview-index', '0');
+      img.src = candidate.previewUrl;
+      img.setAttribute('loading', 'lazy');
+      img.setAttribute('decoding', 'async');
+      img.setAttribute('referrerpolicy', 'no-referrer');
+      img.addEventListener('load', function () {
+        card.classList.add('image-preview-loaded');
+      });
+      img.addEventListener('error', function () {
+        if (tryNextImagePreviewUrl(img, candidate)) return;
+        card.classList.add('image-preview-broken');
+        placeholder.textContent = 'Cannot preview';
+      });
+
+      link.appendChild(placeholder);
+      link.appendChild(img);
+
+      var meta = document.createElement('div');
+      meta.className = 'image-preview-meta';
+      var field = document.createElement('span');
+      field.textContent = candidate.field;
+      var action = document.createElement('strong');
+      action.textContent = 'Open';
+      meta.appendChild(field);
+      meta.appendChild(action);
+
+      card.appendChild(link);
+      card.appendChild(meta);
+      return card;
+    }
+
+    function tryNextImagePreviewUrl(img, candidate) {
+      var urls = candidate.previewUrls || [];
+      var currentIndex = Number(img.getAttribute('data-preview-index') || '0');
+      var nextIndex = currentIndex + 1;
+      if (!urls.length || nextIndex >= urls.length) return false;
+      img.setAttribute('data-preview-index', String(nextIndex));
+      img.src = urls[nextIndex];
+      return true;
+    }
+

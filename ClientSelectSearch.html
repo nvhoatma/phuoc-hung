@@ -1,0 +1,200 @@
+    /*
+      Select Search component.
+      Enhances native select controls without replacing them, so FormData,
+      validation, and existing change handlers keep working.
+    */
+    function enhanceSelectSearch(scope) {
+      installSelectSearchStyles();
+      (scope || document)
+        .querySelectorAll('select.field:not([multiple]), select.overview-filter-select:not([multiple])')
+        .forEach((select) => {
+          if (select.dataset.selectSearchBound === '1') return;
+          const optionsLoading = select.dataset.selectOptionsLoading === '1';
+          if (select.disabled && !optionsLoading) return;
+          select.dataset.selectSearchBound = '1';
+          select.classList.add('select-search-native');
+
+          const component = document.createElement('div');
+          component.className = select.classList.contains('overview-filter-select')
+            ? 'select-search select-search-compact'
+            : 'select-search';
+          component.innerHTML = `
+            <button class="select-search-button" type="button" aria-haspopup="listbox" aria-expanded="false">
+              <span data-select-search-label></span>
+            </button>
+            <div class="select-search-panel" hidden>
+              <input class="select-search-input" type="text" autocomplete="off" placeholder="Search">
+              <div class="select-search-options" role="listbox"></div>
+            </div>
+          `;
+          select.insertAdjacentElement('afterend', component);
+          component.classList.toggle('is-loading', optionsLoading);
+          bindSelectSearch(select, component);
+        });
+    }
+
+    function bindSelectSearch(select, component) {
+      const button = component.querySelector('.select-search-button');
+      const label = component.querySelector('[data-select-search-label]');
+      const panel = component.querySelector('.select-search-panel');
+      const input = component.querySelector('.select-search-input');
+      const list = component.querySelector('.select-search-options');
+
+      const syncLabel = () => {
+        const loading = select.dataset.selectOptionsLoading === '1';
+        const selected = select.options[select.selectedIndex];
+        label.textContent = loading ? 'Loading options...' : (selected && selected.text ? selected.text : 'Select');
+        button.disabled = loading || select.disabled;
+        button.setAttribute('aria-busy', loading ? 'true' : 'false');
+      };
+      const close = () => {
+        panel.hidden = true;
+        button.setAttribute('aria-expanded', 'false');
+        input.value = '';
+        filterSelectSearchOptions(component, '');
+      };
+      const open = () => {
+        if (select.dataset.selectOptionsLoading === '1') return;
+        closeOtherSelectSearch(component);
+        panel.hidden = false;
+        button.setAttribute('aria-expanded', 'true');
+        renderSelectSearchOptions(select, component);
+        input.focus({ preventScroll: true });
+      };
+
+      button.addEventListener('click', () => {
+        if (panel.hidden) open();
+        else close();
+      });
+      input.addEventListener('input', () => filterSelectSearchOptions(component, input.value));
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          close();
+          button.focus({ preventScroll: true });
+          return;
+        }
+        if (event.key !== 'Enter') return;
+        const first = Array.from(list.querySelectorAll('[data-select-search-option]')).find((item) => !item.hidden);
+        if (!first) return;
+        event.preventDefault();
+        chooseSelectSearchOption(select, component, first.dataset.selectSearchOption || '');
+      });
+      select.addEventListener('change', syncLabel);
+      document.addEventListener('pointerdown', (event) => {
+        if (component.contains(event.target) || select.contains(event.target)) return;
+        close();
+      });
+      syncLabel();
+    }
+
+    function renderSelectSearchOptions(select, component) {
+      const list = component.querySelector('.select-search-options');
+      const current = select.value;
+      list.innerHTML = Array.from(select.options).map((option) => {
+        const text = option.text || option.value || '';
+        const value = option.value || '';
+        return `
+          <button class="select-search-option${value === current ? ' selected' : ''}" type="button" data-select-search-option="${escapeAttr(value)}" data-select-search-text="${escapeAttr(normalizeSelectSearchText(text))}" role="option" aria-selected="${value === current ? 'true' : 'false'}">
+            ${escapeHtml(text || 'Blank')}
+          </button>
+        `;
+      }).join('') || '<div class="select-search-empty">No options</div>';
+      list.querySelectorAll('[data-select-search-option]').forEach((option) => {
+        option.addEventListener('click', () => {
+          chooseSelectSearchOption(select, component, option.dataset.selectSearchOption || '');
+        });
+      });
+    }
+
+    function chooseSelectSearchOption(select, component, value) {
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      const panel = component.querySelector('.select-search-panel');
+      const button = component.querySelector('.select-search-button');
+      if (panel) panel.hidden = true;
+      if (button) {
+        button.setAttribute('aria-expanded', 'false');
+        button.focus({ preventScroll: true });
+      }
+    }
+
+    function filterSelectSearchOptions(component, query) {
+      const normalized = normalizeSelectSearchText(query);
+      let visible = 0;
+      component.querySelectorAll('[data-select-search-option]').forEach((option) => {
+        const match = !normalized || (option.dataset.selectSearchText || '').indexOf(normalized) >= 0;
+        option.hidden = !match;
+        if (match) visible += 1;
+      });
+      let empty = component.querySelector('.select-search-empty');
+      if (!empty) {
+        empty = document.createElement('div');
+        empty.className = 'select-search-empty';
+        empty.textContent = 'No matches';
+        component.querySelector('.select-search-options').appendChild(empty);
+      }
+      empty.hidden = visible > 0 || !normalized;
+    }
+
+    function closeOtherSelectSearch(current) {
+      document.querySelectorAll('.select-search-panel:not([hidden])').forEach((panel) => {
+        const owner = panel.closest('.select-search');
+        if (owner === current) return;
+        panel.hidden = true;
+        const button = owner && owner.querySelector('.select-search-button');
+        if (button) button.setAttribute('aria-expanded', 'false');
+      });
+    }
+
+    function normalizeSelectSearchText(value) {
+      return String(value || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    }
+
+    function installSelectSearchStyles() {
+      if (document.getElementById('selectSearchStyles')) return;
+      const style = document.createElement('style');
+      style.id = 'selectSearchStyles';
+      style.textContent = `
+        .select-search-native {
+          position: absolute !important; width: 1px !important; height: 1px !important;
+          opacity: 0 !important; pointer-events: none !important;
+        }
+        .select-search { position: relative; width: 100%; }
+        .select-search-button {
+          width: 100%; min-height: 38px; display: flex; align-items: center; justify-content: space-between;
+          gap: 8px; border: 1px solid #d7dde3; border-radius: 7px; background: #fff; color: var(--charcoal);
+          padding: 8px 30px 8px 10px; font: inherit; font-size: 13px; line-height: 1.25;
+          text-align: left; cursor: pointer; position: relative;
+        }
+        .select-search-button:after {
+          content: ""; position: absolute; right: 11px; top: 50%; width: 7px; height: 7px;
+          border-right: 1.8px solid #8b949e; border-bottom: 1.8px solid #8b949e; transform: translateY(-65%) rotate(45deg);
+        }
+        .select-search-button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .select-search.is-loading .select-search-button { cursor: wait; color: #7b8794; background: #f8fafb; }
+        .select-search.is-loading .select-search-button:after {
+          width: 12px; height: 12px; border: 2px solid #d4dbe1; border-top-color: #8b5a1f;
+          border-radius: 50%; transform: translateY(-50%); animation: select-search-spin .8s linear infinite;
+        }
+        @keyframes select-search-spin { to { transform: translateY(-50%) rotate(360deg); } }
+        .select-search-panel {
+          position: absolute; z-index: 120; top: calc(100% + 5px); left: 0; right: 0; padding: 7px;
+          border: 1px solid #dfe4e9; border-radius: 8px; background: #fff; box-shadow: 0 18px 36px rgba(32,38,45,.16);
+        }
+        .select-search-input {
+          width: 100%; min-height: 36px; border: 1px solid #dfe4e9; border-radius: 6px; padding: 6px 8px;
+          font: inherit; font-size: 13px; line-height: 1.25; outline: none;
+        }
+        .select-search-options { max-height: 220px; overflow: auto; margin-top: 6px; display: grid; gap: 2px; }
+        .select-search-option {
+          min-height: 31px; border: 0; border-radius: 6px; background: transparent; color: var(--charcoal);
+          padding: 7px 8px; text-align: left; font: inherit; font-size: 13px; line-height: 1.25; cursor: pointer;
+        }
+        .select-search-option:hover, .select-search-option.selected { background: #fff8ef; color: #8b5a1f; }
+        .select-search-empty { padding: 9px; color: #7b8794; font-size: 12px; text-align: center; }
+        .select-search-compact { min-width: 116px; max-width: 190px; }
+        .select-search-compact .select-search-button { min-height: 24px; border: 0; background: transparent; padding: 0 22px 0 0; font-weight: 700; }
+      `;
+      document.head.appendChild(style);
+    }

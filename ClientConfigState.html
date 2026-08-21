@@ -1,0 +1,104 @@
+    /*
+      Config App mode, permissions, and shell state transitions.
+    */
+    /*
+      Config App renderer and interactions.
+      The server owns table discovery; this file turns that registry into a
+      four-panel editor with per-item forms and contextual preview.
+    */
+    function syncAppModeShell() {
+      const configMode = state.appMode === 'config';
+      document.body.classList.toggle('config-mode', configMode);
+      document.body.classList.toggle('config-preview-fullscreen', configMode && state.configPreviewFull);
+      renderModeSwitcher();
+    }
+
+    function renderModeSwitcher() {
+      document.querySelectorAll('.app-mode-switcher').forEach((switcher) => {
+        const languagePicker = switcher.querySelector('[data-language-picker]');
+        if (languagePicker) languagePicker.toggleAttribute('hidden', state.appMode === 'config');
+        switcher.querySelectorAll('[data-app-mode]').forEach((button) => {
+          button.classList.toggle('active', button.dataset.appMode === state.appMode);
+          if (button.dataset.appMode === 'config') button.toggleAttribute('hidden', !canOpenConfigApp());
+        });
+      });
+    }
+
+    async function switchAppMode(mode) {
+      const nextMode = mode === 'config' ? 'config' : 'user';
+      if (nextMode === 'config' && !canOpenConfigApp()) {
+        showToast(getConfigAccessMessage());
+        return;
+      }
+      if (state.appMode === nextMode) return;
+      state.appMode = nextMode;
+      syncAppModeShell();
+      if (nextMode === 'config') {
+        renderPage();
+        if (state.configBootstrap) {
+          const configCacheKey = state.activeConfigKey
+            ? getConfigRuntimeCacheKey(state.activeConfigKey)
+            : '';
+          if (configCacheKey && state.configDataCache[configCacheKey]) {
+            state.configData = state.configDataCache[configCacheKey];
+            state.configSelectedRowNumber = getDefaultConfigRowNumber(state.configData);
+            renderPage();
+            ensureConfigDependencies(state.activeConfigKey, false).then(() => {
+              if (state.appMode === 'config' && state.activeConfigKey) renderPage();
+            }).catch(() => null);
+          } else if (state.activeConfigKey) {
+            loadConfigItem(state.activeConfigKey);
+          }
+          scheduleConfigBootstrapRefresh();
+          return;
+        }
+        const bootstrap = await ensureConfigBootstrap(false);
+        if (!bootstrap) {
+          state.appMode = 'user';
+          syncAppModeShell();
+          renderPage();
+        }
+        return;
+      }
+
+      if (state.userAppNeedsRefresh || !state.bootstrap) {
+        await refreshUserAppBootstrap();
+      }
+      renderPage();
+    }
+
+    async function refreshUserAppBootstrap() {
+      setLoading(true);
+      try {
+        state.bootstrap = typeof fetchFreshAppBootstrapWithRuntimeConfig === 'function'
+          ? await fetchFreshAppBootstrapWithRuntimeConfig()
+          : await gasCall('getAppBootstrap', true);
+        state.uiConfig = state.bootstrap.uiConfig || {};
+        state.uiConfigHydrated = !state.uiConfig.deferredDataConfig;
+        state.uiConfigHydrating = false;
+        applyUserAppConfig();
+        syncDocumentTitle();
+        applyDefaultNavCollapse(state.bootstrap.navigation);
+        state.activeStep = findDefaultLandingStep(state.bootstrap.navigation);
+        expandNavToStep(state.bootstrap.navigation, state.activeStep);
+        state.dataCache = {};
+        await loadItem(state.activeStep, { force: true });
+        scheduleDeferredUiConfigHydration();
+        state.userAppNeedsRefresh = false;
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function canOpenConfigApp() {
+      const auth = state.bootstrap && state.bootstrap.auth ? state.bootstrap.auth : {};
+      const configAccess = auth.configAccess || {};
+      return configAccess.canAccessConfig !== false;
+    }
+
+    function getConfigAccessMessage() {
+      const auth = state.bootstrap && state.bootstrap.auth ? state.bootstrap.auth : {};
+      const configAccess = auth.configAccess || {};
+      return configAccess.message || 'You do not have permission to open Config app.';
+    }
+

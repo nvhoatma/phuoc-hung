@@ -1,0 +1,412 @@
+    /*
+      Config App bootstrap, data loading, prefetch, selection data, and row lookup helpers.
+    */
+    async function ensureConfigBootstrap(force = false, options = {}) {
+      if (state.configBootstrap && !force) return state.configBootstrap;
+      if (!force && state.configBootstrapInFlight) return state.configBootstrapInFlight;
+      if (force) {
+        if (!options.keepCache) {
+          state.configDataCache = {};
+          state.configDataCacheMeta = {};
+        }
+        state.configPrefetched = false;
+      }
+      const showBusy = options.silent !== true;
+      if (showBusy) setLoading(true);
+      const fastBootstrap = options.skipAutoSync !== false;
+      const request = gasCall('getConfigAppData', { skipAutoSync: fastBootstrap })
+        .then(async (bootstrap) => {
+          state.configBootstrap = bootstrap;
+          state.configBootstrapRefreshAt = Date.now();
+          applyInitialConfigSelection();
+          if (state.activeConfigKey && options.refreshActive !== false) {
+            if (options.silent) await warmConfigItem(state.activeConfigKey);
+            else await loadConfigItem(state.activeConfigKey);
+          }
+          else if (state.appMode === 'config') renderPage();
+          scheduleConfigPrefetch();
+          if (fastBootstrap) scheduleConfigAutoSyncRefresh();
+          return state.configBootstrap;
+        })
+        .catch((error) => {
+          showError(error);
+          return null;
+        })
+        .finally(() => {
+          if (showBusy) setLoading(false);
+          if (!force) state.configBootstrapInFlight = null;
+        });
+
+      if (!force) state.configBootstrapInFlight = request;
+      return request;
+    }
+
+    function scheduleConfigAppPreload() {
+      // Config App data should load only after the user explicitly enters Config mode.
+    }
+
+    function warmConfigItem(configKey) {
+      return Promise.all([
+        fetchConfigData(configKey, false),
+        ensureConfigDependencies(configKey, false),
+      ]).then(([data]) => {
+        if (state.appMode === 'config' && state.activeConfigKey === configKey) {
+          state.configData = data;
+          state.configSelectedRowNumber = getDefaultConfigRowNumber(data);
+          renderPage();
+        }
+        return data;
+      });
+    }
+
+    function scheduleConfigBootstrapRefresh() {
+      if (!state.configBootstrap || state.configBootstrapInFlight) return;
+      if (Date.now() - (state.configBootstrapRefreshAt || 0) < 60000) return;
+      const run = () => {
+        ensureConfigBootstrap(true, { silent: true, keepCache: true, refreshActive: false, skipAutoSync: true })
+          .then((bootstrap) => {
+            if (!bootstrap && state.appMode === 'config') {
+              state.appMode = 'user';
+              syncAppModeShell();
+              renderPage();
+              return;
+            }
+            if (state.appMode === 'config') renderPage();
+          });
+      };
+      if ('requestIdleCallback' in window) window.requestIdleCallback(run, { timeout: 1600 });
+      else window.setTimeout(run, 350);
+    }
+
+    function scheduleConfigAutoSyncRefresh() {
+      if (state.configAutoSyncDone || state.configAutoSyncInFlight) return;
+      state.configAutoSyncInFlight = true;
+      const run = () => {
+        gasCall('getConfigAppData', { skipAutoSync: false })
+          .then(async (bootstrap) => {
+            const autoSyncChanged = hasConfigAutoSyncChanges(bootstrap && bootstrap.autoSync);
+            state.configBootstrap = bootstrap || state.configBootstrap;
+            state.configBootstrapRefreshAt = Date.now();
+            state.configAutoSyncDone = true;
+            if (autoSyncChanged) {
+              state.configDataCache = {};
+              state.configDataCacheMeta = {};
+              state.configPrefetched = false;
+            }
+            if (state.appMode === 'config') {
+              applyInitialConfigSelection();
+              if (autoSyncChanged && state.activeConfigKey) {
+                await loadConfigItem(state.activeConfigKey, { force: true });
+                return;
+              }
+              renderPage();
+            }
+            scheduleConfigPrefetch();
+          })
+          .catch((error) => {
+            console.warn('Config auto-sync skipped:', error && error.message ? error.message : error);
+          })
+          .finally(() => {
+            state.configAutoSyncInFlight = false;
+          });
+      };
+      if ('requestIdleCallback' in window) window.requestIdleCallback(run, { timeout: 1400 });
+      else window.setTimeout(run, 900);
+    }
+
+    function hasConfigAutoSyncChanges(autoSync) {
+      return !!autoSync && (Number(autoSync.addedCount || 0) > 0 || Number(autoSync.deletedCount || 0) > 0);
+    }
+
+    function applyInitialConfigSelection() {
+      if (!state.configBootstrap) return;
+      if (!state.activeConfigKey) {
+        const defaultKey = state.configBootstrap.items && state.configBootstrap.items.page ? 'page' : '';
+        const item = defaultKey ? state.configBootstrap.items[defaultKey] : null;
+        state.activeConfigKey = defaultKey || getFirstConfigItemKey(getFirstConfigTypeKey(), getFirstConfigGroupKey(getFirstConfigTypeKey()));
+        state.configActiveType = item && item.typeKey ? item.typeKey : state.configActiveType || getFirstConfigTypeKey();
+        state.configActiveGroup = item && item.groupKey ? item.groupKey : state.configActiveGroup || getFirstConfigGroupKey(state.configActiveType);
+      }
+
+      if (!Object.keys(state.configCollapsedTypes || {}).length) {
+        state.configCollapsedTypes = (state.configBootstrap.types || []).reduce((acc, type) => {
+          acc[type.key] = type.key !== state.configActiveType;
+          return acc;
+        }, {});
+      }
+
+      if (!Object.keys(state.configCollapsedGroups || {}).length) {
+        state.configCollapsedGroups = (state.configBootstrap.types || []).reduce((acc, type) => {
+          (type.groups || []).forEach((group) => {
+            acc[`${type.key}:${group.key}`] = type.key !== state.configActiveType || group.key !== state.configActiveGroup;
+          });
+          return acc;
+        }, {});
+      }
+    }
+
+    async function loadConfigItem(configKey, options = {}) {
+      if (!configKey) return;
+      const cacheKey = getConfigRuntimeCacheKey(configKey);
+      if (!options.force && state.configDataCache[cacheKey]) {
+        state.activeConfigKey = configKey;
+        state.configData = state.configDataCache[cacheKey];
+        state.configSelectedRowNumber = getDefaultConfigRowNumber(state.configData);
+        renderPage();
+        ensureConfigDependencies(configKey, false).then(() => {
+          if (state.appMode === 'config' && state.activeConfigKey === configKey) renderPage();
+        }).catch(() => null);
+        scheduleConfigPrefetch();
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const [data] = await Promise.all([
+          fetchConfigData(configKey, !!options.force),
+          ensureConfigDependencies(configKey, !!options.force),
+        ]);
+        state.activeConfigKey = configKey;
+        state.configData = data;
+        state.configSelectedRowNumber = getDefaultConfigRowNumber(data);
+        renderPage();
+        scheduleConfigPrefetch();
+      } catch (error) {
+        showError(error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function ensureConfigDependencies(configKey, forceRefresh) {
+      const requests = [];
+      if ((configKey === 'view' || configKey === 'form' || configKey === 'component') && (forceRefresh || !state.configDataCache['config:page'])) {
+        requests.push(fetchConfigData('page', !!forceRefresh));
+      }
+      if ((configKey === 'form' || configKey === 'component') && (forceRefresh || !state.configDataCache['config:view'])) {
+        requests.push(fetchConfigData('view', !!forceRefresh));
+      }
+      if (configKey === 'form' && (forceRefresh || !state.configDataCache['config:relationship'])) {
+        requests.push(fetchConfigData('relationship', !!forceRefresh));
+      }
+      return requests.length ? Promise.all(requests) : Promise.resolve([]);
+    }
+
+    function fetchConfigData(configKey, forceRefresh = false) {
+      const cacheKey = getConfigRuntimeCacheKey(configKey);
+      if (!forceRefresh && state.configDataCache[cacheKey]) return Promise.resolve(state.configDataCache[cacheKey]);
+      if (!forceRefresh && state.inFlight[cacheKey]) return state.inFlight[cacheKey];
+
+      const request = gasCall('getConfigTableData', configKey, !!forceRefresh)
+        .then((data) => {
+          state.configDataCache[cacheKey] = data;
+          state.configDataCacheMeta[cacheKey] = Date.now();
+          return data;
+        })
+        .finally(() => {
+          delete state.inFlight[cacheKey];
+        });
+
+      if (!forceRefresh) state.inFlight[cacheKey] = request;
+      return request;
+    }
+
+    function scheduleConfigPrefetch() {
+      if (state.configPrefetching || state.configPrefetched || !state.configBootstrap) return;
+      state.configPrefetching = true;
+      const run = () => prefetchConfigItems();
+      if ('requestIdleCallback' in window) window.requestIdleCallback(run, { timeout: 1200 });
+      else window.setTimeout(run, 250);
+    }
+
+    async function prefetchConfigItems() {
+      try {
+        const nearbyKeys = getNearbyConfigItemKeys()
+          .filter((key) => key
+            && key !== state.activeConfigKey
+            && !state.configDataCache[getConfigRuntimeCacheKey(key)]);
+        await prefetchConfigQueue(nearbyKeys.slice(0, 2), 1);
+        state.configPrefetched = true;
+      } finally {
+        state.configPrefetching = false;
+      }
+    }
+
+    function getNearbyConfigItemKeys() {
+      const type = (state.configBootstrap && state.configBootstrap.types ? state.configBootstrap.types : [])
+        .find((entry) => entry.key === state.configActiveType);
+      const group = type
+        ? (type.groups || []).find((entry) => entry.key === state.configActiveGroup)
+        : null;
+      return group && group.items ? group.items.map((item) => item.key) : getAllConfigItemKeys().slice(0, 4);
+    }
+
+    async function prefetchConfigQueue(keys, concurrency) {
+      const queue = [...keys];
+      const workerCount = Math.min(Math.max(concurrency || 1, 1), queue.length);
+      const workers = Array.from({ length: workerCount }, async () => {
+        while (queue.length) {
+          const key = queue.shift();
+          try {
+            await fetchConfigData(key, false);
+            await waitConfigPrefetchTurn();
+          } catch (error) {
+            console.warn('Config prefetch skipped:', key, error && error.message ? error.message : error);
+          }
+        }
+      });
+      await Promise.all(workers);
+    }
+
+    function waitConfigPrefetchTurn() {
+      return new Promise((resolve) => window.setTimeout(resolve, 1100));
+    }
+
+    function getAllConfigItemKeys() {
+      return (state.configBootstrap && state.configBootstrap.types ? state.configBootstrap.types : [])
+        .flatMap((type) => type.groups || [])
+        .flatMap((group) => group.items || [])
+        .map((item) => item.key);
+    }
+
+    function getDefaultConfigRowNumber(data) {
+      const rows = data && data.rows ? data.rows : [];
+      const eligibleRows = rows.filter((row) => {
+        if (state.activeConfigKey === 'form' && isLegacyConfigFormRow(row.record)) return false;
+        if ((state.activeConfigKey === 'view' || state.activeConfigKey === 'form' || state.activeConfigKey === 'component') && state.configPageFilter) {
+          return getConfigRowPageId(row.record) === state.configPageFilter;
+        }
+        return true;
+      });
+      const current = eligibleRows.find((row) => row.rowNumber === state.configSelectedRowNumber);
+      return current ? current.rowNumber : eligibleRows[0] ? eligibleRows[0].rowNumber : null;
+    }
+    function filteredConfigRows() {
+      const rows = state.configData && state.configData.rows ? state.configData.rows : [];
+      const query = String(state.configQuery || '').trim().toLowerCase();
+      return rows.filter((row) => {
+        if (state.activeConfigKey === 'form' && isLegacyConfigFormRow(row.record)) return false;
+        if ((state.activeConfigKey === 'view' || state.activeConfigKey === 'form' || state.activeConfigKey === 'component') && state.configPageFilter) {
+          const pageId = getConfigRowPageId(row.record);
+          if (pageId !== state.configPageFilter) return false;
+        }
+        return !query || row.values.join(' ').toLowerCase().includes(query);
+      });
+    }
+
+    function isLegacyConfigFormRow(record) {
+      const pageId = getRecordValueByHints(record, ['page_id', 'page']);
+      if (pageId) return false;
+      const formId = getRecordValueByHints(record, ['form_id', 'id', 'key', 'config_key']);
+      return /\.(table|detail|card)\.form$/i.test(String(formId || ''));
+    }
+
+    function getConfigPageFilterOptions() {
+      const pageRows = state.configDataCache['config:page'] && state.configDataCache['config:page'].rows
+        ? state.configDataCache['config:page'].rows
+        : [];
+      const cachedViewRows = state.configDataCache['config:view'] && state.configDataCache['config:view'].rows
+        ? state.configDataCache['config:view'].rows
+        : [];
+      const viewRows = state.activeConfigKey === 'view' && state.configData && state.configData.rows
+        ? state.configData.rows
+        : cachedViewRows;
+      const byId = {};
+      pageRows.forEach((row) => {
+        const id = getRecordValueByHints(row.record, ['page_id', 'page']);
+        if (!id) return;
+        const pageType = normalizeClientConfigKey(getRecordValueByHints(row.record, ['page_type', 'type']));
+        if (['report', 'external_link', 'embed_link', 'embeded_link'].includes(pageType)) return;
+        byId[id] = { id, label: getRecordValueByHints(row.record, ['item', 'label', 'name', 'title']) || id };
+      });
+      viewRows.forEach((row) => {
+        const id = getRecordValueByHints(row.record, ['page_id', 'page']);
+        if (id && !byId[id]) byId[id] = { id, label: id };
+      });
+      return Object.keys(byId).sort().map((id) => byId[id]);
+    }
+
+    function getConfigRowPageId(record) {
+      const pageId = getRecordValueByHints(record, ['page_id', 'page']);
+      if (pageId) return pageId;
+      const viewId = getRecordValueByHints(record, ['view_id', 'view']);
+      const view = getCachedViewRecord(viewId);
+      return view ? getRecordValueByHints(view, ['page_id', 'page']) : '';
+    }
+
+    function getCachedViewRecord(viewId) {
+      if (!viewId) return null;
+      const data = state.activeConfigKey === 'view' ? state.configData : state.configDataCache['config:view'];
+      const rows = data && data.rows ? data.rows : [];
+      const normalizedViewId = normalizeClientConfigKey(viewId);
+      const row = rows.find((entry) => normalizeClientConfigKey(getRecordValueByHints(entry.record, ['view_id', 'id', 'key'])) === normalizedViewId);
+      return row ? row.record : null;
+    }
+
+    function getSelectedConfigRow() {
+      const rows = state.configData && state.configData.rows ? state.configData.rows : [];
+      return rows.find((row) => row.rowNumber === state.configSelectedRowNumber) || null;
+    }
+
+    function getConfigRowTitle(row) {
+      if (state.activeConfigKey === 'dataColumn') {
+        return getRecordValueByHints(row.record, ['column_name', 'field', 'column', 'field_name', 'label', 'item', 'name'])
+          || parseConfigColumnId(getRecordValueByHints(row.record, ['column_id', 'id', 'key'])).column
+          || row.values.find(Boolean)
+          || `Row ${row.rowNumber}`;
+      }
+      if (state.activeConfigKey === 'relationship') {
+        const fromColumn = parseConfigColumnId(getRecordValueByHints(row.record, ['from_column_id', 'from_column', 'source_column_id']));
+        const toColumn = parseConfigColumnId(getRecordValueByHints(row.record, ['to_column_id', 'to_column', 'target_column_id']));
+        const sourceField = getRecordValueByHints(row.record, ['source_field', 'parent_field', 'from_field', 'key_field', 'field']) || fromColumn.column;
+        const targetTable = getRecordValueByHints(row.record, ['target_table', 'child_table', 'to_table', 'related_table']) || toColumn.table;
+        const targetField = getRecordValueByHints(row.record, ['target_field', 'child_field', 'to_field', 'lookup_field', 'related_field']) || toColumn.column;
+        if (sourceField || targetField) return `${sourceField || 'Parent'} -> ${targetTable ? `${targetTable}.` : ''}${targetField || 'Nested'}`;
+      }
+      return getRecordValueByHints(row.record, ['config_name', 'title', 'label', 'name', 'item', 'nav_id', 'table', 'column', 'metric_key', 'id'])
+        || row.values.find(Boolean)
+        || `Row ${row.rowNumber}`;
+    }
+
+    function getConfigRowGroup(row) {
+      if (state.activeConfigKey === 'dataColumn') {
+        return getRecordValueByHints(row.record, ['table', 'table_name', 'source_table'])
+          || parseConfigColumnId(getRecordValueByHints(row.record, ['column_id', 'id', 'key'])).table
+          || 'Other table';
+      }
+      if (state.activeConfigKey === 'relationship') {
+        const fromColumn = parseConfigColumnId(getRecordValueByHints(row.record, ['from_column_id', 'from_column', 'source_column_id']));
+        return getRecordValueByHints(row.record, ['source_table', 'parent_table', 'from_table', 'table_name', 'table'])
+          || fromColumn.table
+          || 'Other table';
+      }
+      return getRecordValueByHints(row.record, ['config_group', 'group', 'category', 'section', 'type', 'status'])
+        || '';
+    }
+
+    function parseConfigColumnId(value) {
+      const text = String(value || '').trim();
+      if (!text) return { table: '', column: '' };
+      const parts = text.split(/\s*>\s*/);
+      if (parts.length >= 2) {
+        return {
+          table: parts[0].trim(),
+          column: parts.slice(1).join(' > ').trim(),
+        };
+      }
+      return { table: '', column: text };
+    }
+
+    function getConfigRowSubtitle(row) {
+      return getRecordValueByHints(row.record, ['config_value', 'status', 'type', 'item_type', 'table_name', 'source_table', 'group', 'config_group', 'parent_id'])
+        || `Row ${row.rowNumber}`;
+    }
+
+    function getRecordValueByHints(record, hints) {
+      const keys = Object.keys(record || {});
+      for (const hint of hints) {
+        const found = keys.find((key) => normalizeClientNavText(key) === normalizeClientNavText(hint));
+        if (found && record[found]) return record[found];
+      }
+      return '';
+    }

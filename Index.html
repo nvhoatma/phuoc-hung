@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Process App</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    <? /*
+      User App CSS only. Config App styles are lazy-loaded by ClientConfigLoader
+      so the first screen does not parse the app-builder stylesheet.
+    */ ?>
+    <?!= include('StylesBase'); ?>
+
+    <?!= include('StylesLayout'); ?>
+
+    <?!= include('StylesComponents'); ?>
+
+    <?!= include('StylesTable'); ?>
+
+    <?!= include('StylesDetail'); ?>
+
+    <?!= include('StylesModeSwitcher'); ?>
+
+    <?!= include('StylesMobile'); ?>
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Navigation">
+      <div class="brand">
+        <img class="brand-logo" src="https://ik.imagekit.io/tdkhoi/Logo-Brand-Guideline/Logo-default.png?updatedAt=1778140100369" alt="Process App">
+        <div class="brand-title">
+          <strong>Process App</strong>
+        </div>
+      </div>
+      <section class="nav-section">
+        <button class="nav-parent" type="button" disabled>
+          <span class="nav-dot overview"></span>
+          <span>Loading</span>
+        </button>
+      </section>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-title">
+          <button class="mobile-menu" id="mobileMenu" aria-label="Mở navigation"></button>
+          <div class="topbar-heading">
+            <div class="breadcrumb" id="breadcrumb">Operation / Yêu cầu & theo dõi</div>
+            <h1 id="pageTitle">Loading</h1>
+          </div>
+        </div>
+        <span class="table-load-benchmark topbar-load-benchmark" data-table-load-benchmark role="status" aria-live="polite" hidden>
+          <i aria-hidden="true"></i><span></span>
+        </span>
+      </header>
+      <section class="content" id="content">
+        <section class="panel route-loading-panel">
+          <div class="route-loading-head">
+            <div>
+              <strong>Preparing app</strong>
+              <span>Loading navigation and first table</span>
+            </div>
+            <i aria-hidden="true"></i>
+          </div>
+          <div class="route-loading-lines" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </section>
+      </section>
+      <div class="page-loader" id="pageLoader" aria-live="polite" aria-hidden="true">
+        <span></span>
+        <strong>Loading</strong>
+      </div>
+    </main>
+  </div>
+
+  <div class="app-mode-switcher global-mode-switcher" role="group" aria-label="App mode">
+    <button class="mode-icon-switcher shell-app-slot" type="button" title="Shell app" aria-label="Shell app slot" disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><path d="M14 16h6M17 13v6"/></svg>
+      <span>Shell app</span>
+    </button>
+    <button class="mode-icon-switcher hard-refresh-toggle" type="button" data-hard-refresh title="Hard refresh" aria-label="Clear cached data and settings, then reload app">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v6h-6"/></svg>
+      <span>Hard refresh</span>
+    </button>
+    <div class="language-picker" data-language-picker>
+      <button class="mode-icon-switcher language-toggle" type="button" data-language-toggle title="Language" aria-label="Change language" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg>
+        <span>Language</span>
+      </button>
+      <div class="language-menu" data-language-menu hidden>
+        <button type="button" data-language-option="default" data-i18n-skip><span>A</span><strong>Default</strong></button>
+        <button type="button" data-language-option="vi" data-i18n-skip><span>VI</span><strong>Tiếng Việt</strong></button>
+        <button type="button" data-language-option="en" data-i18n-skip><span>EN</span><strong>English</strong></button>
+        <button type="button" data-language-option="zh" data-i18n-skip><span>中</span><strong>中文</strong></button>
+      </div>
+    </div>
+    <button class="mode-icon-switcher" type="button" data-app-mode="user" title="User app" aria-label="Switch to User app">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg>
+      <span>User app</span>
+    </button>
+  </div>
+
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+  <aside class="drawer" id="drawer" aria-label="Record editor">
+    <div class="drawer-header">
+      <div class="drawer-header-main">
+      <div class="panel-title">
+        <strong id="drawerTitle">Record</strong>
+        <span id="drawerSubtitle">Data binding vào Google Sheet</span>
+      </div>
+      <div class="drawer-header-actions">
+        <button class="btn drawer-tool-btn" id="aiInsightBtn" type="button" title="Copy AI context" style="display:none"></button>
+        <button class="btn drawer-tool-btn" id="formModeToggleBtn" type="button" title="Switch form mode" style="display:none"></button>
+        <button class="btn drawer-tool-btn" id="printFormBtn" type="button" title="Export form as PNG" style="display:none"></button>
+        <button class="btn drawer-tool-btn" id="importBtn" type="button" title="Import records"></button>
+      </div>
+      </div>
+      <section class="import-panel" id="importPanel" hidden>
+        <div class="import-panel-copy">
+          <strong>Import CSV</strong>
+          <span>Upload a CSV using the current table headers. Download the template if you need the right columns.</span>
+        </div>
+        <div class="import-panel-controls">
+          <label class="btn import-file-btn">
+            <input id="importFileInput" type="file" accept=".csv,text/csv">
+            <span>Choose CSV</span>
+          </label>
+          <button class="btn" id="importTemplateBtn" type="button"></button>
+          <button class="btn primary" id="runImportBtn" type="button" disabled>Import rows</button>
+        </div>
+        <div class="import-file-meta" id="importFileMeta">No file selected</div>
+      </section>
+    </div>
+    <form class="drawer-body" id="recordForm"></form>
+    <div class="drawer-footer">
+      <button class="btn danger" id="deleteBtn" type="button">Delete</button>
+      <div class="drawer-actions">
+        <button class="btn" id="closeDrawerBtn" type="button">Cancel</button>
+        <button class="btn primary" id="saveBtn" type="submit" form="recordForm">Save</button>
+      </div>
+    </div>
+  </aside>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    window.APP_WEB_APP_URL = <?!= JSON.stringify(webAppUrl || '') ?>;
+    <? /*
+      Client include order is intentional:
+      state -> helpers -> navigation -> desktop views -> optional preview -> mobile views -> actions.
+      Later files depend on functions declared by earlier files.
+    */ ?>
+    <?!= include('ClientState'); ?>
+
+    <?!= include('ClientHelpers'); ?>
+
+    <?!= include('ClientSelectSearch'); ?>
+
+    <?!= include('ClientNavigation'); ?>
+
+    <?!= include('ClientViews'); ?>
+
+    <?!= include('ClientConfigLoader'); ?>
+
+    <?!= include('ClientImagePreview'); ?>
+
+    <?!= include('ClientMobileViews'); ?>
+
+    <?!= include('ClientActions'); ?>
+
+  </script>
+</body>
+</html>
+

@@ -1,0 +1,122 @@
+    /*
+      Config App nested table and relationship builder helpers.
+    */
+    function renderFormNestedRelationshipBuilder(record) {
+      const nestedHeader = findConfigDataHeaderByHints(['nested_table', 'nested_tables', 'related_table', 'related_tables']);
+      if (!nestedHeader) return '';
+      const nested = getFormNestedTableNames(record);
+      const options = getNestedTableOptions(nested.join(', '), record)
+        .filter((name) => !nested.some((selected) => normalizeClientConfigKey(selected) === normalizeClientConfigKey(name)));
+      const sourceTable = getConfigTargetTable(record);
+      const sourceColumns = getSchemaColumns(sourceTable);
+      if (!sourceTable || !sourceTable.key || !sourceColumns.length) {
+        return `
+          <details class="config-field-group config-field-details form-relationship-builder" open>
+            <summary class="config-field-group-title">
+              <span class="config-field-group-chevron">${ICONS.chevronRight}</span>
+              <strong>Nested tables & relationships</strong>
+              <em>${nested.length}</em>
+            </summary>
+            <input type="hidden" name="${escapeAttr(nestedHeader)}" value="${escapeAttr(nested.join(', '))}" data-form-nested-value>
+            <div class="config-empty-row">Choose a Page ID first so the app can detect the parent table.</div>
+          </details>
+        `;
+      }
+      return `
+        <details class="config-field-group config-field-details form-relationship-builder" open>
+          <summary class="config-field-group-title">
+            <span class="config-field-group-chevron">${ICONS.chevronRight}</span>
+            <strong>Nested tables & relationships</strong>
+            <em>${nested.length}</em>
+          </summary>
+          <div class="form-nested-builder" data-form-nested-builder>
+            <input type="hidden" name="${escapeAttr(nestedHeader)}" value="${escapeAttr(nested.join(', '))}" data-form-nested-value>
+            <div class="form-nested-add">
+              <select class="field" data-form-nested-add-select aria-label="Nested table">
+                <option value="">Add nested table</option>
+              ${options.map((name) => `<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`).join('')}
+            </select>
+              <button class="btn" type="button" data-form-nested-add>Add nested</button>
+            </div>
+            <div class="form-nested-list" data-form-nested-list data-source-table="${escapeAttr(sourceTable.name || '')}">
+              ${nested.map((name) => renderFormRelationshipRow(sourceTable, sourceColumns, name)).join('')}
+            </div>
+          </div>
+        </details>
+      `;
+    }
+
+    function renderFormRelationshipRow(sourceTable, sourceColumns, nestedName) {
+      const targetTable = findBootstrapTableByName(nestedName);
+      const targetColumns = getSchemaColumns(targetTable);
+      const existing = getCachedRelationshipRecord(sourceTable, targetTable);
+      const sourceValue = getRecordValueByHints(existing, ['source_field', 'parent_field', 'from_field', 'key_field', 'field']) || guessRelationshipField(sourceColumns, targetColumns, true);
+      const targetValue = getRecordValueByHints(existing, ['target_field', 'child_field', 'to_field', 'lookup_field', 'related_field']) || guessRelationshipField(targetColumns, sourceColumns, false);
+      return `
+        <div class="form-relationship-row" data-form-relationship-row data-form-nested-item="${escapeAttr(targetTable ? targetTable.name : nestedName)}" data-source-table="${escapeAttr(sourceTable.name || '')}" data-target-table="${escapeAttr(targetTable ? targetTable.name : nestedName)}">
+          <div>
+            <strong>${escapeHtml(sourceTable.name || 'Parent')}</strong>
+            <span>to ${escapeHtml(targetTable ? targetTable.name : nestedName)}</span>
+          </div>
+          <label>
+            <span>Parent field</span>
+            <select class="field" data-relationship-source-field>
+              <option value=""></option>
+              ${sourceColumns.map((column) => `<option value="${escapeAttr(column)}" ${column === sourceValue ? 'selected' : ''}>${escapeHtml(column)}</option>`).join('')}
+            </select>
+          </label>
+          <label>
+            <span>Nested field</span>
+            <select class="field" data-relationship-target-field>
+              <option value=""></option>
+              ${targetColumns.map((column) => `<option value="${escapeAttr(column)}" ${column === targetValue ? 'selected' : ''}>${escapeHtml(column)}</option>`).join('')}
+            </select>
+          </label>
+          <button class="config-icon-btn form-nested-remove" type="button" data-form-nested-remove aria-label="Remove nested table" title="Remove nested table">x</button>
+        </div>
+      `;
+    }
+
+    function getCachedRelationshipRecord(sourceTable, targetTable) {
+      if (!sourceTable || !targetTable) return {};
+      const data = state.configDataCache['config:relationship'];
+      const rows = data && data.rows ? data.rows : [];
+      const sourceKey = normalizeClientConfigKey(sourceTable.name);
+      const targetKey = normalizeClientConfigKey(targetTable.name);
+      const row = rows.find((entry) => (
+        normalizeClientConfigKey(getRecordValueByHints(entry.record, ['source_table', 'parent_table', 'from_table', 'table_name', 'table'])) === sourceKey &&
+        normalizeClientConfigKey(getRecordValueByHints(entry.record, ['target_table', 'child_table', 'to_table', 'related_table'])) === targetKey
+      ));
+      return row ? row.record : {};
+    }
+
+    function getFormNestedTableNames(record) {
+      const explicit = parseConfigMultiValue(getRecordValueByHints(record, ['nested_table', 'nested_tables', 'related_table', 'related_tables']));
+      return uniqueConfigOptions(explicit);
+    }
+
+    function getRelatedNestedTableNamesForFormRecord(record) {
+      const sourceTable = getConfigTargetTable(record);
+      if (!sourceTable) return [];
+      const data = state.configDataCache['config:relationship'];
+      const rows = data && data.rows ? data.rows : [];
+      const sourceCandidates = [sourceTable.name, sourceTable.key, sourceTable.apiTableName, sourceTable.sheetName]
+        .filter(Boolean)
+        .map(normalizeClientConfigKey);
+      return rows
+        .filter((row) => {
+          const source = normalizeClientConfigKey(getRecordValueByHints(row.record, ['source_table', 'parent_table', 'from_table', 'table_name', 'table']));
+          return source && sourceCandidates.includes(source);
+        })
+        .map((row) => getRecordValueByHints(row.record, ['target_table', 'child_table', 'to_table', 'related_table']))
+        .filter(Boolean);
+    }
+
+    function guessRelationshipField(primaryColumns, otherColumns, preferId) {
+      const otherKeys = new Set((otherColumns || []).map(normalizeClientConfigKey));
+      const exact = (primaryColumns || []).find((column) => otherKeys.has(normalizeClientConfigKey(column)));
+      if (exact) return exact;
+      const idField = (primaryColumns || []).find((column) => /^id$|_id$/i.test(normalizeClientConfigKey(column)));
+      return idField || (preferId ? (primaryColumns || [])[0] : '') || '';
+    }
+

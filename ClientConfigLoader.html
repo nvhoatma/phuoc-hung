@@ -1,0 +1,169 @@
+    /*
+      Lazy loader for the Config App.
+      User App startup should not download or execute the app-builder code.
+    */
+    function syncAppModeShell() {
+      const configMode = state.appMode === 'config';
+      document.body.classList.toggle('config-mode', configMode);
+      document.body.classList.toggle('config-preview-fullscreen', configMode && state.configPreviewFull);
+      renderModeSwitcher();
+    }
+
+    function renderModeSwitcher() {
+      document.querySelectorAll('.app-mode-switcher').forEach((switcher) => {
+        const languagePicker = switcher.querySelector('[data-language-picker]');
+        if (languagePicker) languagePicker.toggleAttribute('hidden', state.appMode === 'config');
+        switcher.querySelectorAll('[data-app-mode]').forEach((button) => {
+          button.classList.toggle('active', button.dataset.appMode === state.appMode);
+          if (button.dataset.appMode === 'config') button.toggleAttribute('hidden', !canOpenConfigApp());
+        });
+      });
+    }
+
+    function canOpenConfigApp() {
+      const auth = state.bootstrap && state.bootstrap.auth ? state.bootstrap.auth : {};
+      const configAccess = auth.configAccess || {};
+      return configAccess.canAccessConfig !== false;
+    }
+
+    function getConfigAccessMessage() {
+      const auth = state.bootstrap && state.bootstrap.auth ? state.bootstrap.auth : {};
+      const configAccess = auth.configAccess || {};
+      return configAccess.message || 'You do not have permission to open Config app.';
+    }
+
+    function isConfigClientBundleLoaded() {
+      return window.__configClientBundleLoaded === true;
+    }
+
+    function loadConfigClientBundle() {
+      if (isConfigClientBundleLoaded()) return Promise.resolve(true);
+      if (window.__configClientBundlePromise) return window.__configClientBundlePromise;
+      const cachedSource = readClientCache('staticBundle', 'configClient', CLIENT_CACHE_TTL.staticBundle);
+      if (cachedSource) {
+        const script = document.createElement('script');
+        script.type = 'text/javascript';
+        script.textContent = `${cachedSource || ''}\nwindow.__configClientBundleLoaded = true;`;
+        document.head.appendChild(script);
+        return Promise.resolve(true);
+      }
+      window.__configClientBundlePromise = gasCall('getConfigClientBundle')
+        .then((source) => {
+          const script = document.createElement('script');
+          script.type = 'text/javascript';
+          script.textContent = `${source || ''}\nwindow.__configClientBundleLoaded = true;`;
+          document.head.appendChild(script);
+          writeClientCache('staticBundle', 'configClient', source || '', CLIENT_CACHE_TTL.staticBundle);
+          return true;
+        })
+        .catch((error) => {
+          window.__configClientBundlePromise = null;
+          throw error;
+        });
+      return window.__configClientBundlePromise;
+    }
+
+    function loadConfigStyleBundle() {
+      if (window.__configStyleBundleLoaded) return Promise.resolve(true);
+      if (window.__configStyleBundlePromise) return window.__configStyleBundlePromise;
+      const cachedSource = readClientCache('staticBundle', 'configStyle', CLIENT_CACHE_TTL.staticBundle);
+      if (cachedSource) {
+        const style = document.createElement('style');
+        style.type = 'text/css';
+        style.dataset.configStyleBundle = 'true';
+        style.textContent = cachedSource || '';
+        document.head.appendChild(style);
+        window.__configStyleBundleLoaded = true;
+        return Promise.resolve(true);
+      }
+      window.__configStyleBundlePromise = gasCall('getConfigStyleBundle')
+        .then((source) => {
+          const style = document.createElement('style');
+          style.type = 'text/css';
+          style.dataset.configStyleBundle = 'true';
+          style.textContent = source || '';
+          document.head.appendChild(style);
+          window.__configStyleBundleLoaded = true;
+          writeClientCache('staticBundle', 'configStyle', source || '', CLIENT_CACHE_TTL.staticBundle);
+          return true;
+        })
+        .catch((error) => {
+          window.__configStyleBundlePromise = null;
+          throw error;
+        });
+      return window.__configStyleBundlePromise;
+    }
+
+    function loadConfigTableSchemas() {
+      const tables = state.bootstrap && state.bootstrap.tables ? state.bootstrap.tables : {};
+      const hasSchema = Object.keys(tables).some((key) => {
+        const table = tables[key] || {};
+        return (Array.isArray(table.columns) && table.columns.length) ||
+          (Array.isArray(table.columnProperties) && table.columnProperties.length);
+      });
+      if (hasSchema || window.__configTableSchemasLoaded) return Promise.resolve(true);
+      if (window.__configTableSchemasPromise) return window.__configTableSchemasPromise;
+      window.__configTableSchemasPromise = gasCall('getBootstrapTableSchemas', false)
+        .then((schemaTables) => {
+          if (!state.bootstrap) state.bootstrap = {};
+          state.bootstrap.tables = Object.assign({}, state.bootstrap.tables || {}, schemaTables || {});
+          window.__configTableSchemasLoaded = true;
+          return true;
+        })
+        .catch((error) => {
+          window.__configTableSchemasPromise = null;
+          throw error;
+        });
+      return window.__configTableSchemasPromise;
+    }
+
+    function resetAppModeScroll() {
+      window.scrollTo(0, 0);
+      if (el && el.content) el.content.scrollTop = 0;
+      if (el && el.sidebar) el.sidebar.scrollTop = 0;
+    }
+
+    function renderConfigApp() {
+      syncAppModeShell();
+      el.pageTitle.textContent = 'Config App';
+      el.breadcrumb.textContent = 'Loading config app';
+      el.content.innerHTML = '<section class="panel empty config-loading-panel"><div><h3>Loading config</h3><p>Preparing setting tools.</p></div></section>';
+      Promise.all([loadConfigStyleBundle(), loadConfigClientBundle(), loadConfigTableSchemas()])
+        .then(() => {
+          if (state.appMode === 'config') renderPage();
+        })
+        .catch(showError);
+    }
+
+    async function switchAppMode(mode) {
+      const nextMode = mode === 'config' ? 'config' : 'user';
+      if (nextMode === 'config' && !canOpenConfigApp()) {
+        showToast(getConfigAccessMessage());
+        return;
+      }
+      if (state.appMode === nextMode) return;
+      state.appMode = nextMode;
+      resetAppModeScroll();
+      syncAppModeShell();
+      if (nextMode === 'config') {
+        setLoading(true, 'Loading config');
+        renderPage();
+        try {
+          await Promise.all([loadConfigStyleBundle(), loadConfigClientBundle(), loadConfigTableSchemas()]);
+          renderPage();
+        } catch (error) {
+          state.appMode = 'user';
+          syncAppModeShell();
+          showError(error);
+          renderPage();
+        } finally {
+          setLoading(false);
+        }
+        return;
+      }
+
+      if (state.userAppNeedsRefresh || !state.bootstrap) {
+        await refreshUserAppBootstrap();
+      }
+      renderPage();
+    }
