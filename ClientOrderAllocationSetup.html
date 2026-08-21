@@ -1,0 +1,253 @@
+    /* Order-allocation Setup UI, scoped to the exact NAV id. */
+    (() => {
+      const TARGET_NAV_ID = 'operation.lập_kế_hoạch.phân_bổ_đơn_hàng';
+      const SETUP_SELECTOR = '[data-order-allocation-setup]';
+      let activeSetup = null;
+
+      function isTargetNav_() {
+        return !!(state && state.activeStep && state.activeStep.id === TARGET_NAV_ID);
+      }
+
+      function createSetupButton_(location, className, rowNumber) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = className;
+        button.textContent = 'Setup';
+        button.dataset.orderAllocationSetup = 'true';
+        button.dataset.orderAllocationSetupLocation = location;
+        if (rowNumber) button.dataset.orderAllocationRow = String(rowNumber);
+        button.setAttribute('aria-label', 'Setup phân bổ đơn hàng');
+        button.setAttribute('title', 'Tạo nhanh nhu cầu vật tư và nguồn lực');
+        return button;
+      }
+
+      function syncDetailSetupButton_() {
+        const actions = document.querySelector('.detail-header .detail-actions');
+        if (!actions) return;
+        const existing = actions.querySelector('[data-order-allocation-setup-location="detail"]');
+        const editButton = actions.querySelector('[data-edit-row]');
+        if (!isTargetNav_() || !editButton) {
+          if (existing) existing.remove();
+          return;
+        }
+        if (existing) {
+          existing.dataset.orderAllocationRow = editButton.dataset.editRow || '';
+          return;
+        }
+        editButton.insertAdjacentElement('afterend', createSetupButton_(
+          'detail', 'btn row-edit-btn order-allocation-setup-btn', editButton.dataset.editRow
+        ));
+      }
+
+      function syncDrawerSetupButton_() {
+        const modeButton = document.getElementById('formModeToggleBtn');
+        if (!modeButton || !modeButton.parentElement) return;
+        let setupButton = modeButton.parentElement.querySelector('[data-order-allocation-setup-location="drawer"]');
+        if (!setupButton) {
+          setupButton = createSetupButton_('drawer', 'btn drawer-tool-btn order-allocation-setup-btn');
+          modeButton.insertAdjacentElement('afterend', setupButton);
+        }
+        const drawer = document.getElementById('drawer');
+        const mode = state && state.editing ? String(state.editing.mode || '').toLowerCase() : '';
+        const isFullDetail = mode === 'full' || mode === 'advanced' || !!(drawer && drawer.classList.contains('advanced'));
+        const shouldShow = !!(
+          isTargetNav_() && drawer && drawer.classList.contains('open') && isFullDetail &&
+          state.editing && state.editing.rowNumber && modeButton.style.display !== 'none'
+        );
+        const display = shouldShow ? '' : 'none';
+        if (setupButton.style.display !== display) setupButton.style.display = display;
+      }
+
+      function sync() {
+        syncDetailSetupButton_();
+        syncDrawerSetupButton_();
+      }
+
+      function ensureSetupModal_() {
+        let modal = document.getElementById('orderAllocationSetupModal');
+        if (modal) return modal;
+        const style = document.createElement('style');
+        style.textContent = `
+          .order-allocation-setup-backdrop{position:fixed;inset:0;z-index:5000;background:rgba(15,23,42,.46);display:flex;align-items:center;justify-content:center;padding:24px}
+          .order-allocation-setup-backdrop[hidden]{display:none}
+          .order-allocation-setup-dialog{width:min(1120px,96vw);max-height:92vh;background:#fff;border-radius:16px;box-shadow:0 24px 80px rgba(15,23,42,.28);display:flex;flex-direction:column;overflow:hidden}
+          .order-allocation-setup-header,.order-allocation-setup-footer{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 22px;border-bottom:1px solid #e5e7eb}
+          .order-allocation-setup-header h2{margin:0;font-size:22px}.order-allocation-setup-header p{margin:5px 0 0;color:#64748b}
+          .order-allocation-setup-close{border:0;background:transparent;font-size:28px;line-height:1;cursor:pointer;color:#64748b}
+          .order-allocation-setup-body{padding:20px 22px;overflow:auto;background:#f8fafc}
+          .order-allocation-setup-summary{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px}
+          .order-allocation-setup-summary div{padding:12px 14px;background:#fff;border:1px solid #e2e8f0;border-radius:10px}.order-allocation-setup-summary span{display:block;color:#64748b;font-size:12px;text-transform:uppercase}.order-allocation-setup-summary strong{display:block;margin-top:4px}
+          .order-allocation-setup-section{background:#fff;border:1px solid #e2e8f0;border-radius:12px;margin-top:14px;overflow:hidden}
+          .order-allocation-setup-section h3{margin:0;padding:14px 16px;border-bottom:1px solid #e2e8f0;font-size:16px}
+          .order-allocation-setup-table-wrap{max-height:280px;overflow:auto}.order-allocation-setup-table{width:100%;border-collapse:collapse;font-size:14px}
+          .order-allocation-setup-table th,.order-allocation-setup-table td{text-align:left;padding:11px 14px;border-bottom:1px solid #eef2f7;vertical-align:top}.order-allocation-setup-table th{position:sticky;top:0;background:#f8fafc;color:#475569;z-index:1}
+          .order-allocation-setup-state{padding:44px;text-align:center;color:#64748b}.order-allocation-setup-error{color:#b42318;background:#fff1f0;border:1px solid #fecdca;border-radius:10px;padding:12px 14px}
+          .order-allocation-setup-complete{color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 16px;margin-bottom:16px;font-weight:700}
+          .order-allocation-setup-footer{border-top:1px solid #e5e7eb;border-bottom:0;justify-content:flex-end}.order-allocation-setup-footer .btn{min-width:92px}
+          @media(max-width:700px){.order-allocation-setup-backdrop{padding:8px}.order-allocation-setup-dialog{max-height:96vh}.order-allocation-setup-summary{grid-template-columns:1fr}.order-allocation-setup-header,.order-allocation-setup-body,.order-allocation-setup-footer{padding:14px}}
+        `;
+        document.head.appendChild(style);
+        modal = document.createElement('div');
+        modal.id = 'orderAllocationSetupModal';
+        modal.className = 'order-allocation-setup-backdrop';
+        modal.hidden = true;
+        modal.innerHTML = `
+          <section class="order-allocation-setup-dialog" role="dialog" aria-modal="true" aria-labelledby="orderAllocationSetupTitle">
+            <header class="order-allocation-setup-header">
+              <div><h2 id="orderAllocationSetupTitle">Setup phân bổ đơn hàng</h2><p>Xác minh dữ liệu trước khi tạo hàng loạt</p></div>
+              <button class="order-allocation-setup-close" type="button" data-order-allocation-close aria-label="Đóng">×</button>
+            </header>
+            <div class="order-allocation-setup-body" data-order-allocation-body></div>
+            <footer class="order-allocation-setup-footer">
+              <button class="btn" type="button" data-order-allocation-close>Cancel</button>
+              <button class="btn primary" type="button" data-order-allocation-save disabled>Save</button>
+            </footer>
+          </section>`;
+        document.body.appendChild(modal);
+        return modal;
+      }
+
+      function escapeSetupHtml_(value) {
+        return String(value == null ? '' : value)
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+      }
+
+      function renderSetupLoading_() {
+        const modal = ensureSetupModal_();
+        modal.dataset.saving = 'false';
+        modal.querySelectorAll('[data-order-allocation-close]').forEach((button) => { button.disabled = false; });
+        modal.querySelector('[data-order-allocation-body]').innerHTML = '<div class="order-allocation-setup-state">Đang đọc LSX line và BOM line...</div>';
+        const saveButton = modal.querySelector('[data-order-allocation-save]');
+        saveButton.textContent = 'Save';
+        saveButton.disabled = true;
+      }
+
+      function renderSetupPreview_(preview) {
+        const modal = ensureSetupModal_();
+        const materialRows = preview.materialRows || [];
+        const resourceRows = preview.resourceRows || [];
+        const materialStats = preview.materialStats || {};
+        const resourceStats = preview.resourceStats || {};
+        const totalMissing = materialRows.length + resourceRows.length;
+        modal.querySelector('[data-order-allocation-body]').innerHTML = `
+          ${preview.complete ? '<div class="order-allocation-setup-complete">Dữ liệu Setup đã đầy đủ, không cần thêm.</div>' : ''}
+          <div class="order-allocation-setup-summary">
+            <div><span>LSX line ID</span><strong>${escapeSetupHtml_(preview.lsxLineId)}</strong></div>
+            <div><span>BOM header</span><strong>${escapeSetupHtml_(preview.bomHeader)}</strong></div>
+            <div><span>Material</span><strong>${Number(materialStats.existing || 0)} đã có · ${Number(materialStats.missing || 0)} còn thiếu · ${Number(materialStats.excludedClusters || 0)} Cụm đã loại</strong></div>
+            <div><span>Resource</span><strong>${Number(resourceStats.existing || 0)}/6 đã có · ${Number(resourceStats.missing || 0)} còn thiếu</strong></div>
+          </div>
+          <section class="order-allocation-setup-section">
+            <h3>lsx_material_requirement · ${materialRows.length} records còn thiếu</h3>
+            <div class="order-allocation-setup-table-wrap"><table class="order-allocation-setup-table"><thead><tr><th>BOM line</th><th>LSX line ID</th></tr></thead><tbody>
+              ${materialRows.length ? materialRows.map((row) => `<tr><td>${escapeSetupHtml_(row.bomLine)}</td><td>${escapeSetupHtml_(row.lsxLineId)}</td></tr>`).join('') : '<tr><td colspan="2">Không còn Material cần thêm.</td></tr>'}
+            </tbody></table></div>
+          </section>
+          <section class="order-allocation-setup-section">
+            <h3>lsx_resource_requirement · ${resourceRows.length} records còn thiếu</h3>
+            <div class="order-allocation-setup-table-wrap"><table class="order-allocation-setup-table"><thead><tr><th>LSX line ID</th><th>Routing</th></tr></thead><tbody>
+              ${resourceRows.length ? resourceRows.map((row) => `<tr><td>${escapeSetupHtml_(row.lsxLineId)}</td><td>${escapeSetupHtml_(row.routing)}</td></tr>`).join('') : '<tr><td colspan="2">Không còn Resource cần thêm.</td></tr>'}
+            </tbody></table></div>
+          </section>`;
+        const saveButton = modal.querySelector('[data-order-allocation-save]');
+        saveButton.textContent = preview.complete ? 'Đã đủ' : `Save ${totalMissing} records`;
+        saveButton.disabled = !!preview.complete || totalMissing === 0;
+      }
+
+      function renderSetupError_(error) {
+        const modal = ensureSetupModal_();
+        const message = error && error.message ? error.message : String(error || 'Không tải được dữ liệu Setup.');
+        modal.querySelector('[data-order-allocation-body]').innerHTML = `<div class="order-allocation-setup-error">${escapeSetupHtml_(message)}</div>`;
+        modal.querySelector('[data-order-allocation-save]').disabled = true;
+      }
+
+      function getClickedSetupSource_(button) {
+        const location = button.dataset.orderAllocationSetupLocation || '';
+        return {
+          navId: TARGET_NAV_ID,
+          tableKey: String(location === 'drawer' && state.editing && state.editing.tableKey || state.activeTableKey || ''),
+          rowNumber: location === 'drawer' ? Number(state.editing && state.editing.rowNumber || 0) : Number(button.dataset.orderAllocationRow || 0),
+        };
+      }
+
+      async function openSetup_(button) {
+        const source = getClickedSetupSource_(button);
+        if (!source.tableKey || !source.rowNumber) {
+          showToast('Không xác định được LSX line đã chọn');
+          return;
+        }
+        activeSetup = { source, preview: null };
+        ensureSetupModal_().hidden = false;
+        renderSetupLoading_();
+        try {
+          const preview = await gasCall('getOrderAllocationSetupPreview', source);
+          if (!activeSetup || activeSetup.source !== source) return;
+          activeSetup.preview = preview;
+          renderSetupPreview_(preview);
+        } catch (error) {
+          if (activeSetup && activeSetup.source === source) renderSetupError_(error);
+        }
+      }
+
+      function closeSetup_() {
+        const modal = document.getElementById('orderAllocationSetupModal');
+        if (modal && modal.dataset.saving === 'true') return;
+        if (modal) modal.hidden = true;
+        activeSetup = null;
+      }
+
+      async function saveSetup_() {
+        if (!activeSetup || !activeSetup.preview) return;
+        const modal = ensureSetupModal_();
+        const saveButton = modal.querySelector('[data-order-allocation-save]');
+        modal.dataset.saving = 'true';
+        modal.querySelectorAll('[data-order-allocation-close]').forEach((button) => { button.disabled = true; });
+        saveButton.disabled = true;
+        saveButton.textContent = 'Saving...';
+        try {
+          const result = await gasCall('saveOrderAllocationSetup', Object.assign({}, activeSetup.source, {
+            lsxLineId: activeSetup.preview.lsxLineId,
+            bomHeader: activeSetup.preview.bomHeader,
+          }));
+          [result.materialTableKey, result.resourceTableKey].filter(Boolean).forEach((tableKey) => {
+            delete state.dataCache[getTableRuntimeCacheKey(tableKey)];
+            removeClientCache('tableInitial', tableKey);
+            removeClientCache('tableFull', tableKey);
+          });
+          modal.dataset.saving = 'false';
+          closeSetup_();
+          showToast(result.alreadyComplete
+            ? 'Dữ liệu Setup đã đầy đủ, không cần thêm'
+            : `Đã tạo ${result.materialImported} nhu cầu vật tư và ${result.resourceImported} nhu cầu nguồn lực`);
+        } catch (error) {
+          modal.dataset.saving = 'false';
+          modal.querySelectorAll('[data-order-allocation-close]').forEach((button) => { button.disabled = false; });
+          renderSetupError_(error);
+        } finally {
+          saveButton.textContent = 'Save';
+        }
+      }
+
+      let syncQueued = false;
+      function queueSync_() {
+        if (syncQueued) return;
+        syncQueued = true;
+        Promise.resolve().then(() => { syncQueued = false; sync(); });
+      }
+
+      document.addEventListener('click', (event) => {
+        const setupButton = event.target && event.target.closest ? event.target.closest(SETUP_SELECTOR) : null;
+        if (setupButton && isTargetNav_()) { openSetup_(setupButton); return; }
+        if (event.target && event.target.closest && event.target.closest('[data-order-allocation-close]')) { closeSetup_(); return; }
+        if (event.target && event.target.closest && event.target.closest('[data-order-allocation-save]')) saveSetup_();
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && activeSetup) closeSetup_();
+      });
+
+      const observer = new MutationObserver(queueSync_);
+      observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+      window.OrderAllocationSetup = Object.freeze({ navId: TARGET_NAV_ID, sync });
+      sync();
+    })();
